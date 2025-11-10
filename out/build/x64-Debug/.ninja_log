@@ -1,0 +1,5 @@
+# ninja log v6
+8	932	7844802789195103	CMakeFiles/impl_cpu.dir/src/cpu_impl.cpp.obj	3107306ca38a0ef8
+47	977	7844802789594341	CMakeFiles/masters_thesis.dir/src/main.cpp.obj	23fd0b36f9cb6a5a
+936	1247	7844802798472006	impl_cpu.lib	be5864a3d359945e
+1248	2624	7844802801598099	masters_thesis.exe	af88e6db28c45486
