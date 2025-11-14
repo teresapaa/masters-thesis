@@ -1,17 +1,28 @@
 #include <iostream>
 #include <cmath>
 #include <vector>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 using namespace std;
-
+namespace fs = std::filesystem;
 /*
 * Helper function to find out if the boundaries of the state space are reached; a.k.a. if Kmax is too small
 */
-bool is_bindinpolicy(const vector<int>& policy, int n_k) {
+void check_if_binding(const vector<int>& policy, int n_k) {
+    
+    bool isBinding = false;
 
     for ( int idx : policy) {
-        if (idx == 0 || idx == n_k -1 ) return true; ;
+        if (idx == 0 || idx == n_k - 1) { isBinding = true; }
+        break;
     }
-    return false;
+    if (isBinding) {
+    cout << "State space is binding" << endl;
+    }
+    else {
+        cout << "State space is not binding :) " << endl;
+    }
 }
 
 /*
@@ -25,6 +36,26 @@ double max_abs_difference(const std::vector<double>& V0, const std::vector<doubl
     }
     return d;
 }
+
+/*
+* A helper function to find index where K' - K changes sign: last i with K'[i] > K[i]
+*/
+void find_crossing(vector<double> K, int n_k, vector<int> policy) {
+    int crossing = -1;
+    for (int i = 0; i < n_k; ++i) {
+        double Kp = K[policy[i]];
+        if (Kp > K[i]) crossing = i;
+    }
+    if (crossing >= 0) {
+        cout << "Numerical steady-state approx at K ~ " << K[crossing]
+            << ", K' at that state = " << K[policy[crossing]] << ", index = " << crossing << endl;
+    }
+    else {
+        cout << "No crossing found (policy never suggests K' > K)." << endl;
+    }
+}
+
+
 
 /*
 * The main function calculating the Neoclassical Growth Model
@@ -42,6 +73,7 @@ extern "C" void run_compute() {
     double beta = 0.96; //annual discounting
     double delta = 0.025; //annual depreciation
 
+
     // production function
     auto F = [alpha](double k) { return powf(k, alpha);};
 
@@ -56,7 +88,6 @@ extern "C" void run_compute() {
         //K_j = capital-option of the current period
         //V_j = the previous value function at the point J 
     auto V = [z, delta, beta, F, u, C](double K_i, double K_j, double V_j) { return u(C(K_i, K_j)) + beta * V_j;};
-    
 
     
     //Set the grid points
@@ -75,6 +106,19 @@ extern "C" void run_compute() {
     double diff =0.0;
     int iteration = 0;
     const int max_iter = 20000;
+
+    // snapshot frequency: save V every save_every iterations (and always final)
+    const int save_every = 20;
+    auto save_snapshot = [&](int iter) {
+        std::ostringstream fname;
+        fname << "out/data/vfi_iter_" << setw(4) << setfill('0') << iter << ".csv";
+        ofstream f(fname.str());
+        f << "i,K,V\n";
+        for (int i = 0; i < n_k; ++i) {
+            f << i << "," << K[i] << "," << V_old[i] << "\n";
+        }
+        f.close();
+        };
 
     //Value function iteration loop
     do {
@@ -111,25 +155,31 @@ extern "C" void run_compute() {
     cout << "Final diff: " << diff << endl;
 
     //Are the bounds of the state space binding?
-    if (is_bindinpolicy(policy, n_k)) {
-        cout << "State space is binding" << endl;
-    }
-    else {
-        cout << "State space is not binding :) " << endl;
-    }
+    check_if_binding(policy, n_k);
 
     // Find index where K' - K changes sign: last i with K'[i] > K[i]
-    int crossing = -1;
-    for (int i = 0; i < n_k; ++i) {
-        double Kp = K[policy[i]];
-        if (Kp > K[i]) crossing = i;
+    find_crossing(K, n_k, policy);
+
+    // write final CSV of policy/value
+    {
+        ofstream fout("out/data/vfi_final.csv");
+        fout << "i,K,V,Kp_index,Kp,c\n";
+        for (int i = 0; i < n_k; ++i) {
+            int j = policy[i];
+            double Ki = K[i];
+            double Kj = K[j];
+            double c = C(Ki, Kj);
+            fout << i << "," << K[i] << "," << V_new[i] << "," << j << "," << Kj << "," << c << "\n";
+        }
+        fout.close();
     }
-    if (crossing >= 0) {
-        cout << "Numerical steady-state approx at K ~ " << K[crossing]
-            << ", K' at that state = " << K[policy[crossing]] << ", index = " << crossing << endl;
-    }
-    else {
-        cout << "No crossing found (policy never suggests K' > K)." << endl;
+
+    // save final V snapshot too
+    {
+        ofstream f("out´/data/vfi_iter_final.csv");
+        f << "i,K,V\n";
+        for (int i = 0; i < n_k; ++i) f << i << "," << K[i] << "," << V_new[i] << "\n";
+        f.close();
     }
 
     /*
