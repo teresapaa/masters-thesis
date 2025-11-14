@@ -4,6 +4,10 @@
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <iomanip>
+#include <algorithm>
+#include <limits>
+
 using namespace std;
 namespace fs = std::filesystem;
 /*
@@ -14,8 +18,10 @@ void check_if_binding(const vector<int>& policy, int n_k) {
     bool isBinding = false;
 
     for ( int idx : policy) {
-        if (idx == 0 || idx == n_k - 1) { isBinding = true; }
-        break;
+        if (idx == 0 || idx == n_k - 1) {
+            isBinding = true;
+            break;
+        }
     }
     if (isBinding) {
     cout << "State space is binding" << endl;
@@ -72,7 +78,9 @@ extern "C" void run_compute() {
     double z = 1.0; //productivity
     double beta = 0.96; //annual discounting
     double delta = 0.025; //annual depreciation
+    string output_dir = R"(C:\Users\Administrator\source\repos\masters-thesis)";
 
+    
 
     // production function
     auto F = [alpha](double k) { return powf(k, alpha);};
@@ -107,12 +115,26 @@ extern "C" void run_compute() {
     int iteration = 0;
     const int max_iter = 20000;
 
+    // Ensure output directory exists so file writes succeed
+    fs::path outdir = fs::path(output_dir) / "out" / "data";
+
+    try {
+        fs::create_directories(outdir);
+    }
+    catch (const std::exception& e) {
+        cout << "Warning: failed to create output directory '" << outdir.string() << "': " << e.what() << endl;
+    }
+
     // snapshot frequency: save V every save_every iterations (and always final)
     const int save_every = 20;
     auto save_snapshot = [&](int iter) {
         std::ostringstream fname;
-        fname << "out/data/vfi_iter_" << setw(4) << setfill('0') << iter << ".csv";
+        fname << outdir.string() << "/vfi_iter_" << setw(4) << setfill('0') << iter << ".csv";
         ofstream f(fname.str());
+        if (!f.is_open()) {
+            cout << "Warning: could not open snapshot file for writing: " << fname.str() << endl;
+            return;
+        }
         f << "i,K,V\n";
         for (int i = 0; i < n_k; ++i) {
             f << i << "," << K[i] << "," << V_old[i] << "\n";
@@ -146,6 +168,9 @@ extern "C" void run_compute() {
         V_old = V_new;
         ++iteration;
 
+        if (iteration % save_every == 0) save_snapshot(iteration);
+
+
     } while (diff > epsilon && iteration < max_iter);
 
 
@@ -162,41 +187,54 @@ extern "C" void run_compute() {
 
     // write final CSV of policy/value
     {
-        ofstream fout("out/data/vfi_final.csv");
-        fout << "i,K,V,Kp_index,Kp,c\n";
-        for (int i = 0; i < n_k; ++i) {
-            int j = policy[i];
-            double Ki = K[i];
-            double Kj = K[j];
-            double c = C(Ki, Kj);
-            fout << i << "," << K[i] << "," << V_new[i] << "," << j << "," << Kj << "," << c << "\n";
+        fs::path final_path = outdir / "vfi_final.csv";
+        ofstream fout(final_path.string());
+        if (!fout.is_open()) {
+            cout << "Warning: could not open final CSV for writing: " << final_path.string() << endl;
         }
-        fout.close();
+        else {
+            fout << "i,K,V,Kp_index,Kp,c\n";
+            for (int i = 0; i < n_k; ++i) {
+                int j = policy[i];
+                double Ki = K[i];
+                double Kj = K[j];
+                double c = C(Ki, Kj);
+                fout << i << "," << K[i] << "," << V_new[i] << "," << j << "," << Kj << "," << c << "\n";
+            }
+            fout.close();
+        }
     }
 
     // save final V snapshot too
     {
-        ofstream f("out´/data/vfi_iter_final.csv");
-        f << "i,K,V\n";
-        for (int i = 0; i < n_k; ++i) f << i << "," << K[i] << "," << V_new[i] << "\n";
-        f.close();
+        fs::path snap_path = outdir / "vfi_iter_final.csv";
+        ofstream f(snap_path.string());
+        if (!f.is_open()) {
+            cout << "Warning: could not open final snapshot for writing: " << snap_path.string() << endl;
+        }
+        else {
+            f << "i,K,V\n";
+            for (int i = 0; i < n_k; ++i) f << i << "," << K[i] << "," << V_new[i] << "\n";
+            f.close();
+        }
     }
 
-    /*
-    Print out the optimal policy:
+    
+    //Print out the optimal policy:
     std::cout << "Optimal policy g:" << std::endl;
-    for (int x : g) {
+    for (int x : policy) {
         std::cout << x << " ";
     }
     std::cout << std::endl;
+
        
     cout << "Corresponding K' values for each K:" << endl;
 
-    for (int x : g) {
+    for (int x : policy) {
         std::cout << K[x] << " ";
     }
     std::cout << std::endl;
-    */
+    
 }
 
 

@@ -18,15 +18,16 @@ Depends on: matplotlib, pandas, numpy
 import sys
 import os
 import glob
-import pandas as pd
+import pandas as pd 
 import numpy as np
 import matplotlib.pyplot as plt
 
 if len(sys.argv) < 2:
     print("Usage: plot_vfi.py <output_dir>")
     sys.exit(1)
-
+    
 outdir = sys.argv[1]
+
 
 final_csv = os.path.join(outdir, "vfi_final.csv")
 euler_csv = os.path.join(outdir, "vfi_euler.csv")
@@ -92,21 +93,3 @@ if snap_files:
 else:
     print("No snapshots found to plot convergence (expected files vfi_iter_*.csv).")
 
-# Euler residuals plot
-if os.path.exists(euler_csv):
-    edf = pd.read_csv(euler_csv)
-    # resid may contain NaNs
-    resid = edf["euler_resid"].to_numpy()
-    mask = np.isfinite(resid)
-    plt.figure(figsize=(8,6))
-    plt.plot(edf["K"][mask], np.abs(resid[mask]), label="|Euler residual|")
-    plt.yscale('log')
-    plt.xlabel("K")
-    plt.ylabel("|resid| (log scale)")
-    plt.title("Euler residuals across grid (log scale)")
-    plt.grid(True)
-    plt.tight_layout()
-    plt.savefig(os.path.join(outdir, "euler_residuals.png"), dpi=200)
-    print("Saved", os.path.join(outdir, "euler_residuals.png"))
-else:
-    print("No euler residuals file found at", euler_csv)
