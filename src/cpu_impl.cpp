@@ -234,6 +234,13 @@ extern "C" void run_compute() {
         std::cout << K[x] << " ";
     }
     std::cout << std::endl;
+
+    cout << "value function" << endl;
+
+    for (int x : policy) {
+        std::cout << K[x] << " ";
+    }
+    std::cout << std::endl;
     
 }
 
