@@ -17,18 +17,12 @@
 #include <thrust/copy.h>
 #include <thrust/host_vector.h>
 #include <thrust/execution_policy.h>
+#include <thrust/transform_reduce.h>
 
 using namespace std;
 
 
-double max_abs_difference(const std::vector<double>& V0, const std::vector<double>& V1) {
-    double d = 0.0;
-    for (size_t i = 0; i < V0.size(); ++i) {
-        double diff = std::abs(V0[i] - V1[i]);
-        if (diff > d) d = diff;
-    }
-    return d;
-}
+
 
 __global__ void value_function_iteration_kernel(
     const double* K,
@@ -59,6 +53,7 @@ __global__ void value_function_iteration_kernel(
     }
     V_new[i] = max_value;
     policy[i] = best_j;
+
 
 }
 
@@ -126,14 +121,29 @@ void run_compute() {
         //Copy V_new back to host
         thrust::copy(d_V_new.begin(), d_V_new.end(), V_new.begin());
 
-        diff = max_abs_difference(V_old, V_new);
+        diff = thrust::transform_reduce(
+            thrust::make_zip_iterator(thrust::make_tuple(d_V_new.begin(), d_V_old.begin())),
+            thrust::make_zip_iterator(thrust::make_tuple(d_V_new.end(), d_V_old.end())),
+            [] __host__ __device__(thrust::tuple<double, double> V) {
+            double x = thrust::get<0>(V);
+            double y = thrust::get<1>(V);
+            return x > y ? x - y : y - x;
+            },
+            0.0,
+            thrust::maximum<double>()
+        );
+
         V_old = V_new;
         thrust::copy(V_old.begin(), V_old.end(), d_V_old.begin());
         ++iteration;
 
+        cudaDeviceSynchronize();
+
     }
+
     cout << "Found a solution after " << iteration << " iterations" << endl;
     cout << "Final diff: " << diff << endl;
+    //cout << "Alt diff: " << difference << endl;
 }
 
 
