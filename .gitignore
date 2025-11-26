@@ -40,6 +40,6 @@
 # debug information files
 *.dwo
 
-.vs/
+*.vs/
 
-/out/
+*/out/

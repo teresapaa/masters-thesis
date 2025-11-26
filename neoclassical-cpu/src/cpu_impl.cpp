@@ -116,7 +116,7 @@ extern "C" void run_compute() {
     const int max_iter = 20000;
 
     // Ensure output directory exists so file writes succeed
-    fs::path outdir = fs::path(output_dir) / "out" / "data";
+    fs::path outdir = fs::path(output_dir) / "neoclassical-cpu" / "out" / "data";
 
     try {
         fs::create_directories(outdir);
