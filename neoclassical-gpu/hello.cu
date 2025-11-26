@@ -1,4 +1,4 @@
-// nvcc -G hello.cu -o hello
+// nvcc --extended-lambda -G hello.cu -o hello
 
 #include <iostream>
 #include <cuda_runtime.h>
@@ -20,7 +20,6 @@
 #include <thrust/transform_reduce.h>
 
 using namespace std;
-
 
 
 
@@ -87,9 +86,6 @@ void run_compute() {
     thrust::device_vector<double> d_V_old(n_k, 0.0);
     thrust::device_vector<int> d_policy(n_k, 0);
 
-    vector<double> V_new(n_k, 0.0);
-    vector<int> policy(n_k, 0);
-    vector<double> V_old(n_k, 0.0);
 
     //Initialize values for the VF iteration loop
 
@@ -118,8 +114,7 @@ void run_compute() {
             );
 
         cudaDeviceSynchronize();
-        //Copy V_new back to host
-        thrust::copy(d_V_new.begin(), d_V_new.end(), V_new.begin());
+
 
         diff = thrust::transform_reduce(
             thrust::make_zip_iterator(thrust::make_tuple(d_V_new.begin(), d_V_old.begin())),
@@ -133,17 +128,14 @@ void run_compute() {
             thrust::maximum<double>()
         );
 
-        V_old = V_new;
-        thrust::copy(V_old.begin(), V_old.end(), d_V_old.begin());
+        d_V_old.swap(d_V_new);
         ++iteration;
-
-        cudaDeviceSynchronize();
 
     }
 
     cout << "Found a solution after " << iteration << " iterations" << endl;
     cout << "Final diff: " << diff << endl;
-    //cout << "Alt diff: " << difference << endl;
+
 }
 
 
