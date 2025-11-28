@@ -10,6 +10,7 @@
 #include <iomanip>
 #include <algorithm>
 #include <limits>
+#include <chrono>
 
 // Thrust headers
 #include <thrust/device_vector.h>
@@ -162,9 +163,11 @@ void run_compute() {
     thrust::host_vector<int> policy(d_policy);
     find_crossing(K, n_k, policy);
 
+    /*
     for (int idx : policy) {
         std::cout << idx << " ";
     }
+    */
 
 }
 
@@ -175,7 +178,11 @@ void run_compute() {
 int main()
 {
     std::cout << "masters_thesis: starting compute\n";
+    auto host_start = std::chrono::steady_clock::now();
     run_compute();
+    auto host_end = std::chrono::steady_clock::now();
+    std::chrono::duration<double, std::milli> host_ms = host_end - host_start;
+    std::cout << "End-to-end host wall-clock time: " << host_ms.count() << " ms\n";
     std::cout << "masters_thesis: finished\n";
     return 0;
 }
