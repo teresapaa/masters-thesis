@@ -22,12 +22,6 @@
 
 using namespace std;
 
-/*
-TO DO:
-- add profiling
-- add more checks on the results
-- add simple cmake build 
-*/
 
 void find_crossing(vector<float> K, int n_k, thrust::host_vector<int> policy) {
     int crossing = -1;
@@ -92,7 +86,7 @@ __global__ void value_function_iteration_kernel(
     __syncthreads();
 
 	//Reduction in shared memory to find the max value and best j
-    //optimize this
+	//optimize this with warp reduction later
     if (thread == 0) {
         float max_value = NEG_INF;
         int best_j = 0;

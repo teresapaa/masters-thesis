@@ -23,20 +23,6 @@
 
 using namespace std;
 
-/*
-TO DO:
-- no single-thread loop inside the kernel / experiment with different kernel designs
-- add profiling
-- add more checks on the results
-- add simple cmake build / fix the existing build warnings
-*/
-
-
-//New kernel to run the compute: takes both i and j as inputs, shared memory for max value and policy
-    //calculate value for the i,j pair
-    // if j = 0 continue:
-        // cuda device synchronize
-        // write the max value and policy to global memory
 
 void find_crossing(vector<float> K, int n_k, thrust::host_vector<int> policy) {
     int crossing = -1;

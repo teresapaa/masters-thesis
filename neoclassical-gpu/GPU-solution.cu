@@ -22,12 +22,6 @@
 
 using namespace std;
 
-/*
-TO DO:
-- add profiling
-- add more checks on the results
-- add simple cmake build 
-*/
 
 void find_crossing(vector<float> K, int n_k, thrust::host_vector<int> policy) {
     int crossing = -1;
