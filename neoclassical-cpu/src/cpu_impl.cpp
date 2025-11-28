@@ -1,3 +1,6 @@
+// cmake - S . - B out / build && cmake --build out / build
+// out\build\Debug\neoclassical-cpu.exe
+
 #include <iostream>
 #include <cmath>
 #include <vector>
@@ -219,7 +222,7 @@ extern "C" void run_compute() {
         }
     }
 
-    
+    /*
     //Print out the optimal policy:
     std::cout << "Optimal policy g:" << std::endl;
     for (int x : policy) {
@@ -241,7 +244,8 @@ extern "C" void run_compute() {
         std::cout << K[x] << " ";
     }
     std::cout << std::endl;
-    
+
+    */
 }
 
 
