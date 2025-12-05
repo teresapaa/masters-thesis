@@ -22,7 +22,7 @@
 
 using namespace std;
 
-
+//check the crossing point where K' > K to ensure everything is working
 void find_crossing(vector<float> K, int n_k, thrust::host_vector<int> policy) {
     int crossing = -1;
     for (int i = 0; i < n_k; ++i) {
@@ -39,6 +39,7 @@ void find_crossing(vector<float> K, int n_k, thrust::host_vector<int> policy) {
 }
 
 
+//one thread processes one state i
 __global__ void value_function_iteration_kernel(
     const float* __restrict__ K,
     const float* __restrict__ K_pow,
@@ -52,9 +53,11 @@ __global__ void value_function_iteration_kernel(
     float delta,
     float NEG_INF
 ) {
+    //find the current state
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= n_k) return;
 
+	//initialize variables to track the maximum value and the best policy choice
     float max_value = NEG_INF;
     int best_j = 0;
 
@@ -78,7 +81,8 @@ __global__ void value_function_iteration_kernel(
 
 
 void run_compute() {
-    cout << "Neoclassical Growth model [GPU]" << endl;
+    cout << "Neoclassical Growth model [GPU -v1]" << endl;
+    auto host_start = std::chrono::steady_clock::now();
 
     //Setting up variables
     int n_k = 1000; // number of grid points
@@ -96,6 +100,7 @@ void run_compute() {
     float step = (Kmax - Kmin) / (n_k - 1);
     for (int i = 0; i < n_k; ++i)  K[i] = Kmin + i * step;
 
+	//compute production function K^alpha on the device
     thrust::device_vector<float> d_K = K;
     thrust::device_vector<float> d_K_pow(K.size());
     thrust::transform(d_K.begin(), d_K.end(), d_K_pow.begin(),
@@ -108,7 +113,6 @@ void run_compute() {
 
 
     //Initialize values for the VF iteration loop
-
     float diff = std::numeric_limits<float>::max();
     int iteration = 0;
     const int max_iter = 20000;
@@ -134,7 +138,7 @@ void run_compute() {
             NEG_INF
             );
 
-
+		// Compute the maximum difference between V_new and V_old on the device
         diff = thrust::transform_reduce(
             thrust::make_zip_iterator(thrust::make_tuple(d_V_new.begin(), d_V_old.begin())),
             thrust::make_zip_iterator(thrust::make_tuple(d_V_new.end(), d_V_old.end())),
@@ -151,17 +155,15 @@ void run_compute() {
 
     }
 
+    auto host_end = std::chrono::steady_clock::now();
+    std::chrono::duration<double, std::milli> host_ms = host_end - host_start;
+    std::cout << "End-to-end host wall-clock time: " << host_ms.count() << " ms\n";
+
     cout << "Found a solution after " << iteration << " iterations" << endl;
     cout << "Final diff: " << diff << endl;
 
     thrust::host_vector<int> policy(d_policy);
-    find_crossing(K, n_k, policy);
-
-    /*
-    for (int idx : policy) {
-        std::cout << idx << " ";
-    }
-    */
+	find_crossing(K, n_k, policy);
 
 }
 
@@ -172,11 +174,7 @@ void run_compute() {
 int main()
 {
     std::cout << "masters_thesis: starting compute\n";
-    auto host_start = std::chrono::steady_clock::now();
     run_compute();
-    auto host_end = std::chrono::steady_clock::now();
-    std::chrono::duration<double, std::milli> host_ms = host_end - host_start;
-    std::cout << "End-to-end host wall-clock time: " << host_ms.count() << " ms\n";
     std::cout << "masters_thesis: finished\n";
     return 0;
 }

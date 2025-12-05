@@ -81,7 +81,9 @@ __global__ void value_function_iteration_kernel(
 
 
     void run_compute() {
-        cout << "Neoclassical Growth model [GPU]" << endl;
+        cout << "Neoclassical Growth model [GPU -v2]" << endl;
+        auto host_start = std::chrono::steady_clock::now();
+        
 
         //Setting up variables
         int n_k = 1000; // number of grid points
@@ -161,6 +163,10 @@ __global__ void value_function_iteration_kernel(
             d_V_old.swap(d_V_new);
 
         }
+        auto host_end = std::chrono::steady_clock::now();
+        std::chrono::duration<double, std::milli> host_ms = host_end - host_start;
+        std::cout << "End-to-end host wall-clock time: " << host_ms.count() << " ms\n";
+        
 
         cout << "Found a solution after " << iteration << " iterations" << endl;
         cout << "Final diff: " << diff << endl;
@@ -181,12 +187,9 @@ __global__ void value_function_iteration_kernel(
 
     int main()
     {
+        
         std::cout << "masters_thesis: starting compute\n";
-        auto host_start = std::chrono::steady_clock::now();
         run_compute();
-        auto host_end = std::chrono::steady_clock::now();
-        std::chrono::duration<double, std::milli> host_ms = host_end - host_start;
-        std::cout << "End-to-end host wall-clock time: " << host_ms.count() << " ms\n";
         std::cout << "masters_thesis: finished\n";
         return 0;
     }

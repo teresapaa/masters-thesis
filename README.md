@@ -18,12 +18,16 @@ neoclassical-gpu
 
 
 TODO:
-- add time tracking to the CPU implementation as well; also standardize the time tracking so that check ups won't affect
-- speed up v3 reduction in kernel 
 - add a reinforcement learning implementation for the neoclassical growth model
 - clean the code of each implemetation
+- create simple cmake/cmakes and a shared file containing common functions
+	- switch cpu implemetation doubles -> floats or make both implementations
+- add value function plotting to the gpu implementations as well
+
+CONSIDERATIONS FOR FURTHER WORK:
 - consider adding profiling to cuda implementations
 - consider making a cmake solution for the cuda implementations
-- consider adding a shared test library
+- consider adding a shared file for testing the correctness of each implementation
+- making CPU mroe comparable to GPU implementations in terms of performance measurement
 
 ```
