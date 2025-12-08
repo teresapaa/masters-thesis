@@ -85,7 +85,7 @@ void run_compute() {
     auto host_start = std::chrono::steady_clock::now();
 
     //Setting up variables
-    int n_k = 1000; // number of grid points
+    int n_k = 100; // number of grid points
     float Kmin = 0.5f; // lower bound of the state space
     float Kmax = 100.0f; // upper bound of the state space
     float epsilon = 0.001f; //tolerance of error

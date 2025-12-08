@@ -1,3 +1,5 @@
+//nvcc --extended-lambda -G -arch=sm_86 -std=c++17 -Xcompiler "/std:c++17" rl-solution.cpp -o rl-solution
+
 #include <iostream>
 #include <vector>
 #include <random>
@@ -24,6 +26,7 @@ void run_compute() {
 	float z = 1.0f; //productivity
 	float beta = 0.96f; //annual discounting
 	float delta = 0.025f; //annual depreciation
+	int explr_limits = 100;
 
 
 	//Set the grid points
@@ -31,15 +34,19 @@ void run_compute() {
 	float step = (Kmax - Kmin) / (n_k - 1);
 	for (int i = 0; i < n_k; ++i) K[i] = Kmin + i * step;
 
-	//flattened Q-table
+	//flattened Q-table - maybe restrict the search in a smaller space?
 	std::vector<float> Q(n_k * n_k, 0);
+
+	//flattened current best value + index table
+	std::vector<float> bestV(n_k, 0.0f);
+	std::vector<int> bestA(n_k, 0);
 
 	//Q-learning parameters
 	float learning_rate = 0.7f;
-	double exploration_prob = 0.2;
-	bool decay_epsilon = true;
-	int epochs = 200;
-	int steps_per_epoch = 1000;
+	double exploration_prob = 0.9;
+	bool decay_epsilon = true; 
+	int epochs = 10000;
+	int steps_per_epoch = 50000;
 
 	//set up the probability distributions
 	std::mt19937_64 gen(std::random_device{}());
@@ -48,6 +55,8 @@ void run_compute() {
 	std::uniform_int_distribution<int> rand_action(0, n_k - 1);
 
 	size_t current_state, action;
+
+
 
 	for (int ep = 0; ep < epochs; ++ep) {
 
@@ -59,15 +68,18 @@ void run_compute() {
 			//epsilon-greedy action selection -> explore with probability exploration_prob		
 			if (uniform01(gen) < exploration_prob) {
 				//randomly choose next action
+				//int s = static_cast<int>(current_state);
+				//int lower = s - explr_limits;
+				//if (lower < 0) lower = 0;
+				//int upper = s + explr_limits;
+				//if (upper > n_k) upper = n_k;
+				//std::uniform_int_distribution<int> rand_action(lower, upper);
 				action = rand_action(gen);
 			}
 
 			else {
-				//define next sction as argmax over actions for state s
-				auto row_begin = Q.begin() + static_cast<std::ptrdiff_t>(idx(current_state, 0, n_k));
-				auto row_end = row_begin + static_cast<std::ptrdiff_t>(n_k);
-				auto maxIterator = std::max_element(row_begin, row_end);
-				action = static_cast<std::size_t>(std::distance(row_begin, maxIterator));
+				action = bestA[current_state];
+
 			}
 			
 			// calculate reward for the Q table update
@@ -76,19 +88,24 @@ void run_compute() {
 			float reward = consumption <= 0.0 ? -1e3f : std::log(consumption);
 
 			// compute max over actions in next state
-			auto next_row_begin = Q.begin() + static_cast<std::ptrdiff_t>(idx(action, 0, n_k));
-			auto next_row_end = next_row_begin + static_cast<std::ptrdiff_t>(n_k);
-			double max_next = *std::max_element(next_row_begin, next_row_end);
+			double max_next = bestV[action];
 
 			//find current index and value in flattened Q
 			std::size_t qIndex = idx(current_state, action, n_k);
 			double currentQ = Q[qIndex];
 
 			//Q-learning update
-			Q[qIndex] = currentQ + learning_rate * (reward + beta * max_next - currentQ);
+			auto update = currentQ + learning_rate * (reward + beta * max_next - currentQ);
+			Q[qIndex] = update;
+
+			if (update > bestV[current_state]) {
+				bestV[current_state] = update;
+				bestA[current_state] =  action;
+			}
 
 			//initialize next round
 			current_state = action;
+
 			}
 
 		// decay exploration slowly
@@ -98,6 +115,7 @@ void run_compute() {
 		}
 
 		}
+
 
 	auto end_time = std::chrono::steady_clock::now();
 	std::chrono::duration<double, std::milli> time = end_time - start_time;

@@ -254,6 +254,15 @@ void run_compute() {
     thrust::host_vector<int> policy(d_policy);
     find_crossing(K, n_k, policy);
 
+
+    // Print first 20 entries of policy and value (for inspection)
+    std::cout << "\nSample policy (state K, chosen K'):\n";
+    std::cout << " K      K'     (index) \n";
+    for (std::size_t s = 0; s < std::min<std::size_t>(100, n_k); ++s) {
+        std::size_t a = policy[s];
+        std::cout << std::fixed << std::setprecision(3)
+            << K[s] << " -> " << K[a] << "   (" << a << ")\n";
+    }
 }
 
 
