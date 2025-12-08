@@ -18,7 +18,8 @@ neoclassical-gpu
 	- GPU-v1: a naive cuda implementation distributing each state i for one thread to process
 	- GPU-v2: an advandced implementation using parallel reduction and multiple kernels, distributing each state i to a block of threads to process
 
-
+neoclassical-rl
+- rl-solution: solving the problem using reinforcement learning
 
 Compiling and running:
 
