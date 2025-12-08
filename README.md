@@ -15,7 +15,7 @@ neoclassical-cpu:
 
 neoclassical-gpu
 - three different gpu implementations for the neoclassical growth model
-	- GPU-v1: a naive cuda implementation distributing each state i for one thread to process (v1)
+	- GPU-v1: a naive cuda implementation distributing each state i for one thread to process
 	- GPU-v2: an advandced implementation using parallel reduction and multiple kernels, distributing each state i to a block of threads to process
 
 
