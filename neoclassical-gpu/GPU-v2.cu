@@ -169,7 +169,7 @@ void run_compute() {
     auto host_start = std::chrono::steady_clock::now();
 
     //Setting up variables
-    int n_k = 1000; // number of grid points
+    int n_k = 10000; // number of grid points
     float Kmin = 0.5f; // lower bound of the state space
     float Kmax = 100.0f; // upper bound of the state space
     float epsilon = 0.001f; //tolerance of error
@@ -254,7 +254,7 @@ void run_compute() {
     thrust::host_vector<int> policy(d_policy);
     find_crossing(K, n_k, policy);
 
-
+    /*
     // Print first 20 entries of policy and value (for inspection)
     std::cout << "\nSample policy (state K, chosen K'):\n";
     std::cout << " K      K'     (index) \n";
@@ -263,6 +263,7 @@ void run_compute() {
         std::cout << std::fixed << std::setprecision(3)
             << K[s] << " -> " << K[a] << "   (" << a << ")\n";
     }
+    */
 }
 
 
