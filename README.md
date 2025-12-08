@@ -21,7 +21,7 @@ neoclassical-gpu
 neoclassical-rl
 - rl-solution: solving the problem using reinforcement learning
 
-Compiling and running:
+Compiling and running from x64 Native Tools Command Prompt for VS 2022:
 
 CPU (cpu_impl.cpp, for benchmarking):
 cmake -S . -B out/build && cmake --build out/build
