@@ -50,14 +50,17 @@ double max_abs_difference(const std::vector<double>& V0, const std::vector<doubl
 * A helper function to find index where K' - K changes sign: last i with K'[i] > K[i]
 */
 void find_crossing(vector<double> K, int n_k, vector<int> policy) {
-    int crossing = -1;
+    
+    int crossing_min = -1;
+    int crossing_max = -1;
     for (int i = 0; i < n_k; ++i) {
         double Kp = K[policy[i]];
-        if (Kp > K[i]) crossing = i;
+        if (Kp > K[i]) crossing_min = i;
+        if (Kp >= K[i]) crossing_max = i;
     }
-    if (crossing >= 0) {
-        cout << "Numerical steady-state approx at K ~ " << K[crossing]
-            << ", K' at that state = " << K[policy[crossing]] << ", index = " << crossing << endl;
+    if (crossing_min >= 0) {
+        cout << "Numerical steady-state approx between K ~ " << K[crossing_min] << " and K ~ " << K[crossing_max]
+            << ", K' at the max state = " << K[policy[crossing_max]] << ", indexes = " << crossing_min << ", " << crossing_max << endl;
     }
     else {
         cout << "No crossing found (policy never suggests K' > K)." << endl;
@@ -69,7 +72,7 @@ void find_crossing(vector<double> K, int n_k, vector<int> policy) {
 /*
 * The main function calculating the Neoclassical Growth Model
 */
-extern "C" void run_compute() {
+extern "C" void run_compute(int argc, char* argv[]) {
     cout << "Neoclassical Growth model [no GPU]" << endl;
 	auto host_start = std::chrono::steady_clock::now();
 
@@ -82,8 +85,14 @@ extern "C" void run_compute() {
     double z = 1.0; //productivity
     double beta = 0.96; //annual discounting
     double delta = 0.025; //annual depreciation
-    
-    
+
+    //Parsing command line arguments if set:
+    if (argc > 1) {
+        n_k = std::atoi(argv[1]);
+    }
+    std::cout << "n_k: " << n_k << std::endl;
+   
+
     //Set the grid points
     vector<double> K(n_k);
     double step = (Kmax - Kmin) / (n_k - 1);
