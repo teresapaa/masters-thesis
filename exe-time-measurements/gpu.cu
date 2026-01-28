@@ -271,7 +271,47 @@ std::tuple<Real, Real, int, Real, int, int, Real, Real> run_compute(int n_k) {
     //find crossing
     thrust::host_vector<int> policy(d_policy);
     auto [crossing_min, crossing_max] = find_crossing(K, n_k, policy);
+
     
+    //write the value function into a file in out/rl-test and name the file so that it includes the used grid size
+	///is this necessary to do here? If so, make it only write it once per n_k
+    /*
+    {
+        // ensure directory exists
+        std::filesystem::path out_dir("out/rl-test");
+        std::error_code ec;
+        std::filesystem::create_directories(out_dir, ec);
+        if (ec) {
+            std::cerr << "Failed to create directory: " << out_dir << " : " << ec.message() << std::endl;
+        }
+
+        // build filename: value_function_nk_<n_k>_<REAL_NAME>.csv
+        std::ostringstream fname;
+        fname << "vf_" << n_k << "_" << REAL_NAME << ".csv";
+        std::filesystem::path filepath = out_dir / fname.str();
+
+        // copy converged value function to host
+        thrust::host_vector<Real> h_V(d_V_old);
+
+        std::ofstream ofs(filepath, std::ios::out);
+        if (!ofs) {
+            std::cerr << "Failed to open file: " << filepath << std::endl;
+        }
+        else {
+            // header and precision
+            ofs << "K,V,policy\n";
+            ofs << std::setprecision(std::numeric_limits<Real>::digits10 + 2);
+
+            for (int i = 0; i < n_k; ++i) {
+                int pol = (i < static_cast<int>(policy.size())) ? policy[i] : 0;
+                ofs << K[i] << "," << h_V[i] << "," << pol << "\n";
+            }
+        }
+    }
+    */
+
+
+
     return{ gpu_total_ms, host_ms.count(), iteration, diff, crossing_min, crossing_max , K[crossing_min], K[crossing_max] };
 }
 

@@ -97,7 +97,6 @@ std::tuple<int, int> find_crossing(vector<Real> K, int n_k, vector<int> policy) 
 }
 
 
-
 /*
 * The main function calculating the Neoclassical Growth Model
 */
@@ -152,6 +151,7 @@ std::tuple<std::uint64_t, Real, int, Real, int, int, Real, Real> run_compute(int
 
                 //Calculate consumption
                 Real c = z * powK[i] + (1 - delta) * K[i] - K[j];
+
                 //If consumption is nonpositive, break the loop since C is a decreasing function for increasing K
                 if (c <= 0) break;
 

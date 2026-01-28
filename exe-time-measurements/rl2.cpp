@@ -1,11 +1,12 @@
-//release double: cl /std:c++17 /O2 /EHsc /DUSE_DOUBLE=1 rl.cpp /Fe:rl-double.exe
-//release float: cl /std:c++17 /O2 /EHsc rl.cpp /Fe:rl-float.exe
-//debug double: cl /std:c++17 /Zi /Od /EHsc /DUSE_DOUBLE=1 rl.cpp /Fe:rl-double-d.exe
-//debug float: cl /std:c++17 /Zi /Od /EHsc rl.cpp /Fe:rl-float-d.exe
+//release double: cl /std:c++17 /O2 /EHsc /DUSE_DOUBLE=1 rl2.cpp /Fe:rl2-double.exe
+//release float: cl /std:c++17 /O2 /EHsc rl2.cpp /Fe:rl2-float.exe
+//debug double: cl /std:c++17 /Zi /Od /EHsc /DUSE_DOUBLE=1 rl2.cpp /Fe:rl2-double-d.exe
+//debug float: cl /std:c++17 /Zi /Od /EHsc rl2.cpp /Fe:rl2-float-d.exe
 //parameters for grid 1 000: 1000 50000 0.99 0.999 0.95 38 20 0.001 30 5
 //parameters for grid 10 000: 10000 125000 0.99 0.999 0.99 458 200 0.0006 30 5
 //parametrit komentoriville: n_k steps_per_iter exploration_prob explr_multiplier learning_rate iters explr_limits epsilon rounds warmups
 
+#include <filesystem>
 #include <iostream>
 #include <vector>
 #include <random>
@@ -26,6 +27,8 @@ using Real = float;
 constexpr const char* REAL_NAME = "float";
 #endif
 
+namespace fs = std::filesystem;
+
 /*
 Helper function to calculate the index of a state-action pair in the flattened Q-table
 */
@@ -33,6 +36,42 @@ static inline std::size_t idx(std::size_t s, std::size_t a, std::size_t n_action
 	return s * n_actions + a;
 }
 
+/*Helper to read the final V from a file*/
+std::vector<Real> read_V_final(const fs::path& path_to_final_V, int n_k) {
+	std::vector<Real> V_final;
+	std::ifstream fin(path_to_final_V);
+
+	if (!fin.is_open()) {
+		std::cerr << "Error: could not open file: " << path_to_final_V << std::endl;
+		return std::vector<Real>(n_k, 0.0);  // return empty vector
+	}
+
+	std::string line;
+
+	// Skip header line
+	std::getline(fin, line);
+
+	// Read data lines
+	while (std::getline(fin, line)) {
+		std::stringstream ss(line);
+		std::string token;
+
+		// Skip column 0 (i)
+		std::getline(ss, token, ',');
+
+		// Skip column 1 (K)
+		std::getline(ss, token, ',');
+
+		// Read column 2 (V) - this is what we want
+		std::getline(ss, token, ',');
+		V_final.push_back(std::stod(token));
+
+		// Ignore remaining columns (Kp_index, Kp, c)
+	}
+
+	fin.close();
+	return V_final;
+}
 
 /*
 * Helper function to calculate medians of the running times
@@ -108,6 +147,44 @@ int find_convergence_idx(std::vector<Real> diffs, int iters, Real epsilon) {
 	return iteration;
 }
 
+Real vfi_step_error(const std::vector<Real> V_old, int n_k, std::vector<Real> powK, Real delta, std::vector<Real> K, Real beta) {
+
+	const Real NEG_INF = -std::numeric_limits<Real>::infinity();
+	std::vector<Real> V_new(n_k, 0.0);
+
+    //Find the optimal state for each i
+	for (int i = 0; i < n_k; i++) {
+
+		int current_maxidx = 0;
+		Real current_max = NEG_INF;
+
+		//Go through all the possible transitions from i
+		for (int j = 0; j < n_k; j++) {
+
+			//Calculate consumption
+			Real c = powK[i] + (1 - delta) * K[i] - K[j];
+
+			//If consumption is nonpositive, break the loop since C is a decreasing function for increasing K
+			if (c <= 0) break;
+
+			//Update the best value found so far
+			else {
+				Real value = log(c) + beta * V_old[j];
+				if (value > current_max) {
+					current_max = value;
+					current_maxidx = j;
+				}
+			}
+
+		}
+		//update policy and value functions 
+
+		V_new[i] = current_max;
+		}
+	return max_abs_difference(V_old, V_new);
+	}
+
+
 
 /*
 Where the actual calculation happens
@@ -128,7 +205,11 @@ std::tuple<std::uint64_t, Real, int, Real, int, int, Real, Real> run_compute(int
 	Real beta = 0.96f; //annual discounting
 	Real delta = 0.025f; //annual depreciation
 
-
+	//get a final V to compare to
+	std::string filename = "cpu_" + std::to_string(n_k) + "_vfi_iter_final.csv";
+	fs::path path_to_final_V = fs::path("..") / "plots" / "out" / "data" / fs::path(filename);
+	//std::vector<Real> V_final = read_V_final(path_to_final_V, n_k);
+	
 	//Q-learning parameters
 	bool decay_epsilon = true; //whether to decay exploration probability
 	int max_iter = 10000; //max number of iterations to make sure we don't run forever
@@ -164,9 +245,14 @@ std::tuple<std::uint64_t, Real, int, Real, int, int, Real, Real> run_compute(int
 	std::transform(K.begin(), K.end(), powK.begin(),
 		[alpha](Real k) { return pow(k, alpha); });
 
-	//The main Q-learning loop
-	for (int iter = 0; iter < iters; ++iter) {
+	int iteration = 0;
+	Real diff_to_final_V = 100.0f;
+	Real vfi_diff = 100.0f;
+	int max_iteration = iters;
 
+	//The main Q-learning loop
+
+	do {
 		//start with a random state
 		current_state = rand_state(gen);
 
@@ -226,10 +312,17 @@ std::tuple<std::uint64_t, Real, int, Real, int, int, Real, Real> run_compute(int
 
 		//to record convergence
 		diff = max_abs_difference(bestV_old, bestV);
-		diffs[iter] = diff;
+		diffs[iteration] = diff;
 		bestV_old = bestV;
 
-	};
+		//diff_to_final_V = max_abs_difference(bestV, V_final);
+		vfi_diff = vfi_step_error(bestV, n_k, powK, delta, K, beta);
+		iteration++;
+
+
+		
+
+	} while (vfi_diff > epsilon && iteration < max_iteration);
 
 	//stop measuring time and CPU cycles
 	QueryProcessCycleTime(hProcess, &endCycles);
@@ -252,6 +345,12 @@ std::tuple<std::uint64_t, Real, int, Real, int, int, Real, Real> run_compute(int
 
 	//Find the index of convergence
 	auto conv_idx = find_convergence_idx(diffs, iters, epsilon);
+
+	//std::cout << "Diff to final V: " << diff_to_final_V << std::endl;
+
+	std::cout << "Iteration: " << iteration << std::endl;
+
+	std::cout << "Vfi iteration diff: " << vfi_diff << std::endl;
 
 	return{ CPU_cycles, time.count(), conv_idx, diff, crossing_min, crossing_max , K[crossing_min], K[crossing_max]};
 }
