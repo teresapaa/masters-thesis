@@ -1,5 +1,7 @@
-// nvcc --extended-lambda -G -arch=sm_86 -std=c++17 -DUSE_DOUBLE=1 -Xcompiler "/std:c++17" GPU-v2.cu -o GPU-v2
-// nvcc --extended-lambda -G -arch=sm_86 -std=c++17  -Xcompiler "/std:c++17" GPU-v2.cu - o GPU-v2
+// nvcc --extended-lambda -G -arch=sm_86 -std=c++17 -DUSE_DOUBLE=1 -Xcompiler "/std:c++17" gpu.cu -o gpu-double-g
+// nvcc --extended-lambda -G -arch=sm_86 -std=c++17  -Xcompiler "/std:c++17" gpu.cu -o gpu-float-g
+// G pois, jos haluaa ajaa releasena, -DUSE_DOUBLE=1 pois jos haluu ajaa floatina
+// parametrit komentoriviltä: n_k rounds warmups
 
 #include <iostream>
 #include <cuda_runtime.h>
@@ -24,33 +26,52 @@
 
 using namespace std;
 
+//Determine whether to compile as doubles or floats
 #if defined(USE_DOUBLE)
 using Real = double;
+constexpr const char* REAL_NAME = "double";
 #else
 using Real = float;
+constexpr const char* REAL_NAME = "float";
 #endif
 
+/*
+* Helper function to calculate medians of the running times
+*/
+template<typename T>
+Real median_of_vector(const std::vector<T>& input) {
+    if (input.empty()) throw std::domain_error("median of empty vector");
+    std::vector<T> v = input;            // make a copy if we must preserve original
+    size_t n = v.size();
+    size_t mid = n / 2;
+    std::nth_element(v.begin(), v.begin() + mid, v.end());
+    if (n % 2 == 1) {
+        return static_cast<Real>(v[mid]);
+    }
+    else {
+        // v[mid] is the upper middle. Find the maximum in the lower partition [0, mid).
+        T upper = v[mid];
+        T lower = *std::max_element(v.begin(), v.begin() + mid);
+        return (static_cast<Real>(lower) + static_cast<Real>(upper)) * 0.5;
+    }
+}
 
-
-//working on a test file:
-//extern void find_crossing(vector<Real> K, int n_k, thrust::host_vector<int> policy);
-
-//check the crossing point where K' > K to ensure everything is working
-void find_crossing(vector<Real> K, int n_k, thrust::host_vector<int> policy) {
+/*
+* A helper function to find index where K' - K changes sign: last i with K'[i] > K[i]
+*/
+std::tuple<int, int> find_crossing(vector<Real> K, int n_k, thrust::host_vector<int> policy) {
     int crossing_min = -1;
     int crossing_max = -1;
     for (int i = 0; i < n_k; ++i) {
-        double Kp = K[policy[i]];
+        Real Kp = K[policy[i]];
         if (Kp > K[i]) crossing_min = i;
         if (Kp >= K[i]) crossing_max = i;
     }
-    if (crossing_min >= 0) {
-        cout << "Numerical steady-state approx between K ~ " << K[crossing_min] << " and K ~ " << K[crossing_max]
-            << ", K' at the max state = " << K[policy[crossing_max]] << ", indexes = " << crossing_min << ", " << crossing_max << endl;
-    }
-    else {
+    if (crossing_min < 0) {
         cout << "No crossing found (policy never suggests K' > K)." << endl;
     }
+
+    return { crossing_min, crossing_max };
 }
 
 
@@ -117,32 +138,13 @@ __global__ void value_function_iteration_kernel(
 		}
     }
 
-	//store the warp results to shared memory
+    //store the warp results to shared memory
     if (lane == 0) {
         w_max_values[warpId] = v;
-		w_best_js[warpId] = j;
+        w_best_js[warpId] = j;
     }
 
-    /*
-    //recuction using the shared memory 
-    __syncthreads();
-    if (thread == 0) {
-        Real max_value = NEG_INF;
-        int best_j = 0;
-        for (int w = 0; w < numWarps; ++w) {
-            if (w_max_values[w] > max_value) {
-                max_value = w_max_values[w];
-                best_j = w_best_js[w];
-            }
-        }
-        V_new[i] = max_value;
-        policy[i] = best_j;
-    }
-    
-
-    */
-
-    //move onto doing the reduction across warps with shuffles    
+    //do the reduction across warps with shuffles    
 	__syncthreads();
 
     if (warpId == 0) { //use only the warp 0 for this
@@ -163,28 +165,24 @@ __global__ void value_function_iteration_kernel(
             V_new[i] = vv;
             policy[i] = jj;
         }
-    }
-
-    
-
-      
+    }      
 
 }
 
       
 
+/*
+Where the actual calculation happens
+*/
+std::tuple<Real, Real, int, Real, int, int, Real, Real> run_compute(int n_k) {
 
-void run_compute(int argc, char* argv[]) {
-
-    cout << "Neoclassical Growth model [GPU -v3]" << endl;
-
+    //set up cuda timing
     cudaEvent_t gpu_start, gpu_stop;
     cudaEventCreate(&gpu_start);
     cudaEventCreate(&gpu_stop);
     
 
     //Setting up default variables
-    int n_k = 1000; // number of grid points
     Real Kmin = 0.5f; // lower bound of the state space
     Real Kmax = 100.0f; // upper bound of the state space
     Real epsilon = 0.001f; //tolerance of error
@@ -193,12 +191,7 @@ void run_compute(int argc, char* argv[]) {
     Real beta = 0.96f; //annual discounting
     Real delta = 0.025f; //annual depreciation
 
-    //Parsing command line arguments if set:
-    if (argc > 1) {
-        n_k = std::atoi(argv[1]);
-    }
-    std::cout << "n_k: " << n_k << std::endl;
-
+    //start host timer
     auto host_start = std::chrono::steady_clock::now();
 
     //Set the grid points 
@@ -211,13 +204,13 @@ void run_compute(int argc, char* argv[]) {
     thrust::device_vector<Real> d_V_old(n_k, 0.0f);
     thrust::device_vector<int> d_policy(n_k, 0);
 
-
     //Initialize values for the VF iteration loop
     Real diff = std::numeric_limits<Real>::max();
     int iteration = 0;
     const int max_iter = 20000;
     const Real NEG_INF = -std::numeric_limits<Real>::max();
 
+    //Start gpu timing
     cudaEventRecord(gpu_start);
 
     //Calculate K^alpha for each grid point
@@ -266,42 +259,105 @@ void run_compute(int argc, char* argv[]) {
 
     }
     
+    //record run times
     cudaEventRecord(gpu_stop);
     cudaEventSynchronize(gpu_stop);
-
-	//cheks to ensure everything is working
     auto host_end = std::chrono::steady_clock::now();
-    std::chrono::duration<double, std::milli> host_ms = host_end - host_start;
-    std::cout << "End-to-end host wall-clock time: " << host_ms.count() << " ms\n";
-    float gpu_total_ms = 0.0f;
-    cudaEventElapsedTime(&gpu_total_ms, gpu_start, gpu_stop);
-    std::cout << "Total GPU compute time (kernels only): " << gpu_total_ms << " ms\n";
+    std::chrono::duration<Real, std::milli> host_ms = host_end - host_start;
+    float gpu_total_ms_f = 0.0f;
+    cudaEventElapsedTime(&gpu_total_ms_f, gpu_start, gpu_stop);
+    Real gpu_total_ms = static_cast<Real>(gpu_total_ms_f);
 
-    cout << "Found a solution after " << iteration << " iterations" << endl;
-    cout << "Final diff: " << diff << endl;
-
+    //find crossing
     thrust::host_vector<int> policy(d_policy);
-    find_crossing(K, n_k, policy);
-
-    /*
-    // Print first 20 entries of policy and value (for inspection)
-    std::cout << "\nSample policy (state K, chosen K'):\n";
-    std::cout << " K      K'     (index) \n";
-    for (std::size_t s = 0; s < std::min<std::size_t>(100, n_k); ++s) {
-        std::size_t a = policy[s];
-        std::cout << std::fixed << std::setprecision(3)
-            << K[s] << " -> " << K[a] << "   (" << a << ")\n";
-    }
-    */
+    auto [crossing_min, crossing_max] = find_crossing(K, n_k, policy);
+    
+    return{ gpu_total_ms, host_ms.count(), iteration, diff, crossing_min, crossing_max , K[crossing_min], K[crossing_max] };
 }
 
 
+/*
+Function to handle the running with parameters from command line
+*/
+void handle_running(int argc, char* argv[]) {
+    cout << "Neoclassical Growth model [GPU]" << endl;
+
+    //declare variables
+    Real diff, crossing_min_K, crossing_max_K, GPU_median, wall_clock_median;
+    int iteration, crossing_min, crossing_max;
+    int rounds = 1;
+    int warmups = 0;
+    int n_k = 145;
+
+    //if command line parameters set, run according to those
+    if (argc > 3) {
+        n_k = std::atoi(argv[1]);
+        rounds = std::atoi(argv[2]);
+        warmups = std::atoi(argv[3]);
+
+        vector<Real> GPU_times(rounds, 0);
+        vector<Real> wall_clocks(rounds, 0);
+
+        for (int warmup = 0; warmup < warmups; warmup++) {
+            Real GPU_time;
+            Real wall_clock;
+            std::tie(GPU_time, wall_clock, iteration, diff, crossing_min, crossing_max, crossing_min_K, crossing_max_K) = run_compute(n_k);
+        }
+
+
+        //actual recordings
+        for (int i = 0; i < rounds; i++) {
+            Real GPU_time;
+            Real wall_clock;
+            std::tie(GPU_time, wall_clock, iteration, diff, crossing_min, crossing_max, crossing_min_K, crossing_max_K) = run_compute(n_k);
+            GPU_times[i] = GPU_time;
+            wall_clocks[i] = wall_clock;
+        }
+
+        //calculate medians
+        GPU_median = median_of_vector(GPU_times);
+        wall_clock_median = median_of_vector(wall_clocks);
+    }
+
+    else {
+        //default to one run with n_k = 100
+        Real GPU_time;
+        Real wall_clock;
+        std::tie(GPU_time, wall_clock, iteration, diff, crossing_min, crossing_max, crossing_min_K, crossing_max_K) = run_compute(n_k);
+        GPU_median = static_cast<Real>(GPU_time);
+        wall_clock_median = wall_clock;
+    }
+
+    //write results to a file
+    auto now = std::chrono::system_clock::now();
+    std::time_t now_time = std::chrono::system_clock::to_time_t(now);
+    std::string filename = "out\\gpu";
+    std::filesystem::path p{ filename };
+
+    std::ofstream ofs(filename, std::ios::out | std::ios::app);
+    if (!ofs) {
+        std::cerr << "Failed to open file: " << filename << '\n';
+    }
+
+    else {
+        ofs << std::ctime(&now_time);
+        ofs << "Using Real = " << REAL_NAME << std::endl;
+        ofs << "Grid size(n_k): " << n_k << std::endl;
+        ofs << "Found a solution after " << iteration << " iterations" << endl;
+        ofs << "Final diff: " << diff << endl;
+        ofs << "Numerical steady-state approx between K ~ " << crossing_min_K << " and K ~ " << crossing_max_K
+            << ", indexes = " << crossing_min << ", " << crossing_max << endl;
+        ofs << "GPU-time median of " << rounds << " rounds: " << GPU_median << std::endl;
+        ofs << "Wall-clock median of " << rounds << " rounds: " << wall_clock_median << "\n";
+        ofs << "\n";
+    }
+}
 
 
 int main(int argc, char* argv[])
 {
     std::cout << "masters_thesis: starting compute\n";
-    run_compute(argc, argv);
+    handle_running(argc, argv);
     std::cout << "masters_thesis: finished\n";
     return 0;
 }

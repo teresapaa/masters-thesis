@@ -27,7 +27,7 @@ if len(sys.argv) < 2:
     sys.exit(1)
     
 #outdir = sys.argv[1]
-outdir = os.path.join("C:\\Users\\Administrator\\source\\repos\\masters-thesis\\neoclassical-cpu", sys.argv[1])
+outdir = os.path.join(os.path.expanduser("~"), "out", "graphs"
 
 
 final_csv = os.path.join(outdir, "vfi_final.csv")
