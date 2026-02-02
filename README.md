@@ -83,10 +83,6 @@ Currently developing an **overlapping generations (OLG) model** with pension sys
 - **Government budget constraints** linking contributions to payouts
 - **Aggregate capital and labor markets** with general equilibrium
 
-**Planned Extensions:**
-- Multi-period pension reform analysis
-- Demographic shocks (aging population scenarios)
-- Neural network policy approximators for high-dimensional state spaces
 
 ---
 
