@@ -10,20 +10,20 @@
 #include <numeric>
 #include <cstdint>
 
-
+//cl /std:c++20 /Zi /EHsc model.cpp
 
 //Determine whether to compile as doubles or floats
-#if defined(USE_DOUBLE)
-using Real = double;
-constexpr const char* REAL_NAME = "double";
-#else
+#if defined(USE_REAL)
 using Real = float;
 constexpr const char* REAL_NAME = "float";
+#else
+using Real = double;
+constexpr const char* REAL_NAME = "double";
 #endif
 
 
 // if stated as static constexpr this can be read form anywhere!xd 
-static constexpr Real NEG_INF = -std::numeric_limits<Real>::max();
+static constexpr Real NEG_INF = Real(-1e30);
 
 // Utility function with penalty for non-positive consumption
 inline Real u_log(Real c) {
@@ -38,7 +38,7 @@ struct Params {
     Real theta = Real(5.0);
 
     // Bonds / government
-    Real B = Real(450);         // debt portfolio
+    Real B = Real(200);         // debt portfolio
 
     // Time
     int workingYears = 10;
@@ -49,7 +49,7 @@ struct Params {
     int n_tau = 10;
     int n_a = 10;
 
-    Real Kmin = Real(0.5), Kmax = Real(100.0);
+    Real Kmin = Real(0.0), Kmax = Real(100.0);
     Real tauMin = Real(0.01), tauMax = Real(1.0);
     Real amin = Real(0.5), amax = Real(10.0);
 
@@ -543,8 +543,7 @@ struct Model {
             num_firms, num_workers,
             b_worker_state, b_entrep_state);
         auto mm = std::minmax_element(b_entrep_state.begin(), b_entrep_state.end());
-        std::cout << "b_worker=" << (double)b_worker_state[0]
-            << " b_entrep[min,max]=[" << (double)*mm.first << "," << (double)*mm.second << "]\n";
+
 
         bellman_retirement(worker_r, b_worker_state);
         bellman_retirement(entrep_r, b_entrep_state);
@@ -600,7 +599,7 @@ struct Model {
             for (int y = 0; y < p.retirementYears; ++y) {
                 const std::size_t cur = worker_r.idx(0, y, i);
                 out.assets += Real(num_workers) * g.K[i];
-                Real c = worker_w.cons[cur];
+                Real c = worker_r.cons[cur];
                 if (!std::isfinite(c)) {
                     std::cerr << "Non-finite cons in worker_w at y=" << y
                         << " i=" << i << " c=" << (double)c << "\n";
@@ -627,19 +626,19 @@ struct Model {
                         << " i=" << i << " c=" << (double)c << "\n";
                     std::abort();
                 }
-                out.consumption += Real(num_workers) * c;
+                out.consumption += c;
                 i = (int)entrep_w.policy[cur];
             }
             for (int y = 0; y < p.retirementYears; ++y) {
                 const std::size_t cur = entrep_r.idx(sid, y, i);
                 out.assets += g.K[i];
-                Real c = entrep_w.cons[cur];
+                Real c = entrep_r.cons[cur];
                 if (!std::isfinite(c)) {
                     std::cerr << "Non-finite cons in entrep_w at y=" << y
                         << " i=" << i << " c=" << (double)c << "\n";
                     std::abort();
                 }
-                out.consumption += Real(num_workers) * c;
+                out.consumption += c;
                 i = (int)entrep_r.policy[cur];
             }
         }
@@ -647,12 +646,60 @@ struct Model {
         return out;
     }
 
+    struct RUpdater {
+        bool have_prev = false;
+        Real r_prev = 0, F_prev = 0;
+
+        Real max_step = Real(0.005);     // clamp dr
+        Real damp = Real(0.2);       // extra damping
+        Real r_min = Real(-0.95);
+        Real r_max = Real(1.0);       // pick something reasonable
+
+        Real update(Real r, Real F) {
+            Real r_new = r;
+
+            if (have_prev) {
+                Real denom = (F - F_prev);
+                if (std::isfinite(denom) && std::abs(denom) > Real(1e-12)) {
+                    r_new = r - F * (r - r_prev) / denom;
+                }
+                else {
+                    // fallback: tiny step in right direction
+                    r_new = r - Real(1e-6) * F;
+                }
+            }
+            else {
+                // first step fallback
+                r_new = r - Real(1e-6) * F;
+            }
+
+            // clamp step
+            Real dr = r_new - r;
+            if (dr > max_step) dr = max_step;
+            if (dr < -max_step) dr = -max_step;
+
+            r_new = r + dr;
+            // damp
+            r_new = (Real(1) - damp) * r + damp * r_new;
+
+            // bounds
+            r_new = std::min(std::max(r_new, r_min), r_max);
+
+            // store
+            have_prev = true;
+            r_prev = r;
+            F_prev = F;
+
+            return r_new;
+        }
+    };
     
 
     void solve() {
 
         init_educated_guess();
         update_prices_from_firms();
+        RUpdater r_updater;
 
         Real last_r = r, last_T = T, last_C = C_agg, last_P = P;
 
@@ -662,19 +709,36 @@ struct Model {
 
             // 2) Update macros every sweep
             //update r
-            Totals totals = compute_totals();
-            std::cout << "totC=" << (double)totals.consumption
-                << " totA=" << (double)totals.assets << "\n";
-            Real new_r = totals.assets / p.B * r;
-            r = (Real(1) - p.alpha_macro) * r + p.alpha_macro * new_r;
-            T = (Real(1) - p.alpha_macro) * T + p.alpha_macro * (r * p.B);
-            C_agg = (Real(1) - p.alpha_macro) * C_agg + p.alpha_macro * totals.consumption;
+
 
             // 3) Update firms only every x sweeps (soft)
             if (iter % p.firm_update_every == 0) {
+                Totals totals = compute_totals();
+
+                Real F = totals.assets - p.B;
+                
+                r = r_updater.update(r, F);
+
+                Real total_T = p.n_tau * p.n_a * (p.workingYears) * T;
+                Real T_agg = (Real(1) - p.alpha_macro) * total_T + p.alpha_macro * (r * p.B);
+                //T = T_agg / (p.n_tau * p.n_a * (p.workingYears));
+                T = (r * p.B) / (p.n_tau * p.n_a * (p.workingYears));
+                C_agg = (Real(1) - p.alpha_macro) * C_agg + p.alpha_macro * totals.consumption/ (p.retirementYears + p.workingYears);
                 update_entrepreneur_set(p.gamma_firm);
                 update_prices_from_firms();
             }
+
+
+            std::cout << "sweep " << iter
+                << " Vdiff=" << (double)Vdiff
+                << " r=" << (double)r
+                << " T=" << (double)T
+                << " P=" << (double)P
+                << " C=" << (double)C_agg
+               // << " dr=" << (double)dr
+                //<< " dC=" << (double)dC
+                << "\n";
+
 
             // 4) Convergence checks occasionally
             if (iter % p.check_every == 0) {
@@ -683,15 +747,6 @@ struct Model {
                 const Real dP = std::abs(P - last_P);
                 const Real dC = std::abs(C_agg - last_C);
 
-                std::cout << "sweep " << iter
-                    << " Vdiff=" << (double)Vdiff
-                    << " r=" << (double)r
-                    << " T=" << (double)T
-                    << " P=" << (double)P
-                    << " C=" << (double)C_agg
-                    << " dr=" << (double)dr
-                    << " dC=" << (double)dC
-                    << "\n";
 
                 // stop when BOTH V and macros are stable
                 if (Vdiff < p.tol_V && dr < p.tol_macro && dT < p.tol_macro && dP < p.tol_macro && dC < p.tol_macro) {
