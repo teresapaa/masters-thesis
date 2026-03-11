@@ -41,10 +41,11 @@ inline Real u_log(Real c) {
 struct Params {
     //Model parameters 
     Real beta = Real(0.98);   
-    Real theta = Real(5.0);
+
+    Real theta = Real(5);
 
     // Bonds / government
-    Real B = Real(580);         // debt portfolio
+    Real B = Real(1500);         // debt portfolio
 
     // Time
     int workingYears = 10;
@@ -52,11 +53,11 @@ struct Params {
 
     // Grids
     int n_k = 100;
-    int n_tau = 5;
-    int n_a = 5;
+    int n_tau = 15;
+    int n_a = 15;
 
     Real Kmin = Real(0.0), Kmax = Real(50.0);
-    Real tauMin = Real(0.01), tauMax = Real(0.1);
+    Real tauMin = Real(0.01), tauMax = Real(0.06);
     Real amin = Real(0.5), amax = Real(5.0);
 
     int max_iters = 20000;     // total Bellman iterations allowed
@@ -164,26 +165,27 @@ struct Model {
     // Entrepreneur membership weights (0/1)
     std::vector<Real> firm_weight; // size n_a*n_tau
 
+    //Entrepreneur ranking
+    std::vector<int> entrep_order;
+    
     // Prices 
     std::vector<Real> prices;      // size n_a*n_tau
 
     // parameters
     Real T = Real(0.001);      // lump sum taxes (guess)
     //Real T = Real(0);
-    Real r = Real(0.02);   // interest rate (guess)
+    Real r = Real(0.037);   // interest rate (guess)
     Real P = Real(1);      // aggregate price index (placeholder)
-    Real C_agg = Real(7); // aggregate consumption (placeholder)
+    Real C_agg = Real(1600); // aggregate consumption (placeholder)
     Real l = Real(1);      // labor supply (placeholder)
     Real L_agg = Real(1);
     Real A_agg = Real(1);
 
-    int num_firms = 0;
+    int num_firms = 20;
 
     //helpers
     int n_types;
     int lifeYears;
-    Real mass = Real(1);
-    Real workerMass;
 
     explicit Model(const Params& params)
         : p(params), g(p),
@@ -198,8 +200,7 @@ struct Model {
         s_entry_entrep((std::size_t)p.n_a* p.n_tau, Real(0)),
         n_types(p.n_a * p.n_tau),
         lifeYears(p.workingYears + p.retirementYears),
-        //mass(Real(1) / Real(n_types * lifeYears)),
-        workerMass(Real(n_types * p.workingYears) * mass)
+        entrep_order((std::size_t)p.n_a* p.n_tau)
     {}
 
     //index in the income vector
@@ -210,6 +211,7 @@ struct Model {
     //initialize the enterepreneurs 
     void init_educated_guess() {
         num_firms = 0;
+        /*
         for (int it = 0; it < p.n_tau; ++it) {
             for (int ia = 0; ia < p.n_a; ++ia) {
                 const bool guessFirm = (it < p.n_tau / 2) && (ia >= p.n_a / 2);
@@ -217,13 +219,50 @@ struct Model {
 				num_firms += guessFirm ? 1 : 0;
             }
         }
+        */
+
+        for (int it = 0; it < p.n_tau; ++it) {
+            for (int ia = 0; ia < p.n_a; ++ia) {
+                const bool guessFirm = (ia >= (p.n_a - 1) && (it <= 3));
+                firm_weight[(std::size_t)entrep_state_id(ia, it, p.n_tau)] = guessFirm ? Real(1) : Real(0);
+                num_firms += guessFirm ? 1 : 0;
+            }
+        }
 
     }
 
 
+    void arrange_entrepreneurs() {
+
+        std::vector<int> entrep_values((std::size_t)p.n_a * p.n_tau);
+
+        for (int it = 0; it < p.n_tau; ++it) {
+            for (int ia = 0; ia < p.n_a; ++ia) {
+                const int sid = entrep_state_id(ia, it, p.n_tau);
+                entrep_values[sid] = (1 - g.tau[it]) * std::pow(g.a[ia], p.theta - 1);
+            }
+        }
+
+        std::iota(entrep_order.begin(), entrep_order.end(), 0);
+        std::sort(entrep_order.begin(), entrep_order.end(), [&entrep_values](int a, int b) {
+            return entrep_values[a] > entrep_values[b];
+            });
+    }
+
+
+    void update_entreps() {
+        std::fill(firm_weight.begin(), firm_weight.end(), 0);
+
+        int max_firms = int(n_types * Real(3) / Real(4));
+        for (int i = 0; i < max_firms; i++) {
+            int sid = entrep_order[i];
+            firm_weight[sid] = 1;
+        }
+    }
+
     void update_total_consumption() {
         int num_workers = n_types - num_firms;
-        Real total_L = num_workers * l;
+        Real total_L = num_workers * l * p.workingYears;
         C_agg = total_L * A_agg;
         //C_agg = 40;
         std::cout << "num_workers, total_L, C_agg: " << num_workers << ", " << total_L << ", " << C_agg << "\n";
@@ -235,7 +274,7 @@ struct Model {
             for (int ia = 0; ia < p.n_a; ++ia) {
                 const int sid = entrep_state_id(ia, it, p.n_tau);
                 if (firm_weight[(std::size_t)sid] <= Real(0.5)) continue;
-                A_calc += std::pow(g.a[ia], p.theta - 1);
+                A_calc += std::pow(g.a[ia], p.theta - 1) * p.workingYears;
             }
         }
         if (A_calc <= Real(0)) { A_agg = Real(1); return; }
@@ -266,8 +305,8 @@ struct Model {
     }
 
     //find the new entrepreneurs: TODO - take goods/labor market clearing huomioon!
-    int update_entrepreneur_set(Real damping = Real(0.2)) {
-        const Real Vw0 = worker_w.V_old[worker_w.idx(0, 0, 0)];
+    int update_entrepreneur_set(int max_step = -1) {
+        /*const Real Vw0 = worker_w.V_old[worker_w.idx(0, 0, 0)];
 		//std::vector<std::pair<Real, int>> scores((std::size_t)p.n_a * p.n_tau, Real(0));
 
         num_firms = 0;
@@ -282,6 +321,47 @@ struct Model {
         }
 
         return num_firms;
+        */
+        // default max_step to ~5% of population
+        if (max_step < 0) max_step = std::max(1, n_types / 20);
+
+        // score each type by entrepreneurial advantage at age=0, k=0
+        std::vector<std::pair<Real, int>> scores;
+        scores.reserve((std::size_t)n_types);
+
+        const Real Vw0 = worker_w.V_old[worker_w.idx(0, 0, 0)];
+
+        for (int sid = 0; sid < n_types; ++sid) {
+            const Real Ve0 = entrep_w.V_old[entrep_w.idx(sid, 0, 0)];
+            scores.push_back({ Ve0 - Vw0, sid });
+        }
+
+        // sort descending by score: best entrepreneurs first
+        std::sort(scores.begin(), scores.end(),
+            [](const auto& a, const auto& b) { return a.first > b.first; });
+
+        // count how many types genuinely prefer entrepreneurship
+        int target_firms = 0;
+        for (int i = 0; i < n_types; ++i)
+            if (scores[i].first > Real(0)) ++target_firms;
+
+        // clamp change to at most max_step per outer iteration
+        int new_num_firms = std::clamp(
+            target_firms,
+            num_firms - max_step,
+            num_firms + max_step
+        );
+
+        // apply: top new_num_firms by score become entrepreneurs
+        std::fill(firm_weight.begin(), firm_weight.end(), Real(0));
+        for (int rank = 0; rank < new_num_firms; ++rank) {
+            const int sid = scores[rank].second;
+            firm_weight[(std::size_t)sid] = Real(1);
+        }
+
+        num_firms = new_num_firms;
+        return num_firms;
+        
     }
 
 
@@ -458,8 +538,6 @@ struct Model {
         Real total_b_worker = 0;
 
         int num_workers = n_types - num_firms;
-        Real worker_weight = Real(num_workers) * mass;
-
 
         // 2) Compute and store s_entry for worker (no asset dependence)
         {
@@ -473,7 +551,7 @@ struct Model {
             s_entry_worker = s;
         }
 
-        total_b_per_period += total_b_worker * worker_weight;
+        total_b_per_period += total_b_worker * num_workers;
 
         // 3) Compute and store s_entry for each entrepreneur type sid (no asset dependence)
         // Also accumulate total SS inflow from firms per period (for total_b_per_period)
@@ -495,7 +573,7 @@ struct Model {
                     const Real inc = income_entrep[inc_idx(sid, y)];
                     Real new_s = tau_i * inc;
                     s = (Real(1) + r) * s + new_s;  // entrepreneur SS paid on income (inc)
-                    if (is_entrep) { total_b_per_period += new_s * mass; }
+                    if (is_entrep) { total_b_per_period += new_s; }
                 }
                 s_entry_entrep[(std::size_t)sid] = s;
             }
@@ -516,11 +594,11 @@ struct Model {
         Real sum_entrep_s = Real(0);
         for (int sid = 0; sid < p.n_a * p.n_tau; ++sid) {
             if (firm_weight[(std::size_t)sid] > Real(0.5)) {
-                sum_entrep_s += s_entry_entrep[(std::size_t)sid] * mass * p.retirementYears;
+                sum_entrep_s += s_entry_entrep[(std::size_t)sid] * p.retirementYears;
             }
         }
 
-        Real retiree_s = (s_entry_worker * num_workers * mass * p.retirementYears + sum_entrep_s);
+        Real retiree_s = (s_entry_worker * num_workers * p.retirementYears + sum_entrep_s);
 
         if (!(retiree_s > Real(0)) || !std::isfinite(retiree_s) || !std::isfinite(total_b))
         {
@@ -544,7 +622,7 @@ struct Model {
         Real paid = Real(0);
 
         // workers
-        paid += Real(num_workers) * mass * Real(p.retirementYears) * bW;
+        paid += Real(num_workers) * Real(p.retirementYears) * bW;
 
         /*
         // entrepreneurs (only active firm types)
@@ -662,20 +740,20 @@ struct Model {
             int i = 0;
             for (int y = 0; y < p.workingYears; ++y) {
                 const std::size_t cur = worker_w.idx(0, y, i);
-                out.assets += Real(num_workers) * mass * g.K[i];
-                out.consumption += Real(num_workers) * mass * worker_w.cons[cur];
+                out.assets += Real(num_workers) * g.K[i];
+                out.consumption += Real(num_workers) * worker_w.cons[cur];
                 i = (int)worker_w.policy[cur];
             }
             for (int y = 0; y < p.retirementYears; ++y) {
                 const std::size_t cur = worker_r.idx(0, y, i);
-                out.assets += Real(num_workers) * mass * g.K[i];
+                out.assets += Real(num_workers) * g.K[i];
                 Real c = worker_r.cons[cur];
                 if (!std::isfinite(c)) {
                     std::cerr << "Non-finite cons in worker_w at y=" << y
                         << " i=" << i << " c=" << (double)c << "\n";
                     std::abort();
                 }
-                out.consumption += Real(num_workers) * mass * c;
+                out.consumption += Real(num_workers) * c;
                 i = (int)worker_r.policy[cur];
             }
 
@@ -689,27 +767,27 @@ struct Model {
             int i = 0;
             for (int y = 0; y < p.workingYears; ++y) {
                 const std::size_t cur = entrep_w.idx(sid, y, i);
-                out.assets += mass * g.K[i];
+                out.assets += g.K[i];
                 Real c = entrep_w.cons[cur];
                 if (!std::isfinite(c)) {
                     std::cerr << "Non-finite cons in entrep_w at y=" << y
                         << " i=" << i << " c=" << (double)c << "\n";
                     std::abort();
                 }
-                out.consumption += c * mass;
+                out.consumption += c ;
                 i = (int)entrep_w.policy[cur];
             }
 
             for (int y = 0; y < p.retirementYears; ++y) {
                 const std::size_t cur = entrep_r.idx(sid, y, i);
-                out.assets += g.K[i] * mass;
+                out.assets += g.K[i];
                 Real c = entrep_r.cons[cur];
                 if (!std::isfinite(c)) {
                     std::cerr << "Non-finite cons in entrep_w at y=" << y
                         << " i=" << i << " c=" << (double)c << "\n";
                     std::abort();
                 }
-                out.consumption += c * mass;
+                out.consumption += c;
                 i = (int)entrep_r.policy[cur];
             }
         }
@@ -801,6 +879,7 @@ struct Model {
         bool lo_set = false;
         bool hi_set = false;
 
+
         Real update(Real r, Real assets, Real B) {
             Real gap = assets - B;
 
@@ -830,22 +909,11 @@ struct Model {
             if (lo_set && hi_set) return r_hi - r_lo;
             return Real(1.0);
         }
+
     };
 
-    Real compute_total_L_demand(Real total_C) {
-
-        Real L_coef = Real(0);
-        const int num_workers = n_types - num_firms;
-
-        for (int sid = 0; sid < p.n_a * p.n_tau; ++sid) {
-            if (firm_weight[(std::size_t)sid] <= Real(0.5)) continue;
-			Real price_multiplier = std::pow(prices[(std::size_t)sid] / P, p.theta);
-			L_coef += price_multiplier / g.a[sid / p.n_tau];
-        }
-
-        L_coef = L_coef;
-
-        return L_coef;
+    Real compute_total_L_demand() {
+        return (p.theta - 1) / p.theta * P * C_agg;;
     }
 
 
@@ -872,13 +940,14 @@ struct Model {
         Totals totals = compute_totals();
         Real bond_gap = totals.assets - p.B;
 
+
+
         std::cout << "Bond market gap (A - B): " << (double)bond_gap
             << " | rel=" << (double)(bond_gap / (std::max(Real(1e-12), p.B))) << "\n";
 
         // Labor market residuals
-        Real L_supply = (n_types - num_firms) * mass * l;
-        Real L_coef = compute_total_L_demand(totals.consumption);
-        Real L_demand = L_coef * C_agg;
+        Real L_supply = (n_types - num_firms) * l * p.workingYears;
+        Real L_demand = (p.theta - 1) / p.theta * P * C_agg;
         Real L_gap = L_supply - L_demand;
 
         std::cout << "Labor: L_supply=" << (double)L_supply
@@ -1135,10 +1204,13 @@ struct Model {
 
     void solve() {
 
-        init_educated_guess();
+        arrange_entrepreneurs();
+        update_entreps();
         update_prices_from_firms();
         calculate_A_agg();
         update_total_consumption();
+        compute_total_L_demand();
+
 
 
         RUpdater r_updater;
@@ -1147,29 +1219,26 @@ struct Model {
 
         Real assets = 0;
 
+        int num_updates = 0;
 
         for (int iter = 1; iter <= p.max_iters; ++iter) {
 
             // 1) One Bellman sweep (operator uses current macros + firm set)
-            Real Vdiff = bellman_one_iter();
+            Real Vdiff = 1;
+            while (Vdiff > p.tol_V) {
+                Vdiff = bellman_one_iter();
+            }
 
             // 2) Update macros every sweep
 
             // 3) Update firms only every x sweeps (soft)
-            if (iter % p.firm_update_every == 0) {
+            //if (iter % p.firm_update_every == 0) {
                 Totals totals = compute_totals();
 
                 Real F = totals.assets - p.B;
                 
-                if (iter % p.firm_update_every == 0 && Vdiff < p.tol_V) {
-                    r = r_updater.update(r, totals.assets, p.B);
-                    //r = r_updater.update(r, totals.assets, p.B);
-                    //r = r_updater_old.update(r, F);
-                    Real working_age_population = Real(n_types) * Real(p.workingYears);
-                    Real T_new = r * p.B / working_age_population;               // per-person tax among workers
-                    //T = (1 - p.alpha_macro) * T + p.alpha_macro * T_new;
-                    T = T_new;
-
+                /*
+                if (iter % p.firm_update_every == 0) {
                     std::cout << "RUPDATE: assets=" << totals.assets
                         << " B=" << p.B
                         << " gap=" << (totals.assets - p.B)
@@ -1178,12 +1247,15 @@ struct Model {
                         << " lo_set=" << r_updater.lo_set
                         << " hi_set=" << r_updater.hi_set << "\n";
                 }
+                */
 
-                Real L_supply = (n_types - num_firms) * mass * l;
+                Real L_supply = (n_types - num_firms) * p.workingYears * l;
                 //Real L_coef = compute_total_L_demand(totals.consumption);
 
-                Real L_coef = compute_total_L_demand(C_agg);
-                Real L_demand = L_coef * L_supply;
+                Real L_coef = compute_total_L_demand();
+                Real L_demand = L_coef * C_agg;
+                
+                C_agg = totals.consumption;
 
                 //C_agg = L_supply / L_coef;
 
@@ -1191,14 +1263,28 @@ struct Model {
 
                 int target = n_types - std::round(L_demand / L_supply);
 
-                //int nf = update_entrepreneur_set_to_target(target, p.gamma_firm);
+                int nf = update_entrepreneur_set(1);
+                num_firms = nf;
                 std::cout << "number of firms: " << num_firms << "\n";
 
-                //update_prices_from_firms();
+                //bool add = C_agg > totals.consumption;
+                //num_firms += add ? 1 : -1;
+                //update_entreps();
+                update_prices_from_firms();
+                calculate_A_agg();
+                //update_total_consumption();
+                compute_total_L_demand();
+                r = r_updater.update(r, totals.assets, p.B);
+                //r = r_updater.update(r, totals.assets, p.B);
+                //r = r_updater_old.update(r, F);
+                Real working_age_population = Real(n_types) * Real(p.workingYears);
+                Real T_new = r * p.B / working_age_population;               // per-person tax among workers
+                T = (1 - p.alpha_macro) * T + p.alpha_macro * T_new;
+                T = T_new;
 
+                std::cout << "num firms:" << num_firms << "\n";
                 std::cout << "consumption: " << totals.consumption << "\n";
                 std::cout << "assets: " << totals.assets << "\n";
-
                 std::cout << "L supply and demand: " << L_supply << ", " << L_coef << "\n";
 
                 //Old total consumption update
@@ -1209,9 +1295,9 @@ struct Model {
 
                 std::cout << "Asset diff: " << p.B - assets << "\n";
 
-            }
+            //}
 
-           /*
+           
             std::cout << "sweep " << iter
                 << " Vdiff=" << (double)Vdiff
                 << " r=" << (double)r
@@ -1221,7 +1307,7 @@ struct Model {
                // << " dr=" << (double)dr
                 //<< " dC=" << (double)dC
                 << "\n";
-                */
+               
 
 
             // 4) Convergence checks occasionally
@@ -1235,7 +1321,7 @@ struct Model {
 
 
                 // stop when BOTH V and macros are stable
-                if (Vdiff < p.tol_V && dr < p.tol_macro && dT < p.tol_macro && dP < p.tol_macro && dC < p.tol_macro && d_am < 1 && r_updater.bracket_width() < 0.001) {
+                if (Vdiff < p.tol_V && dr < p.tol_macro && dT < p.tol_macro && dP < p.tol_macro && dC < p.tol_macro) {
                     std::cout << "Converged.\n";
                     run_diagnostics();
                     break;
