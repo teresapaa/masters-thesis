@@ -43,6 +43,7 @@ struct Model {
     BlockArrays worker_r;
     BlockArrays entrep_r;
 
+    //Device pointers
     DeviceBlockArrays d_worker_w;
     DeviceBlockArrays d_entrep_w;
     DeviceBlockArrays d_worker_r;
@@ -50,6 +51,12 @@ struct Model {
 
     Real* d_K = nullptr;
     Real* d_income = nullptr;
+
+    Real* d_b_worker = nullptr;   // size 1
+    Real* d_b_entrep = nullptr;   // size n_a * n_tau
+
+    Real* d_income_entrep = nullptr;  // n_types * workingYears
+    Real* d_tau = nullptr;  // n_tau
 
     //Worker and entrepreneur incomes
     std::vector<Real> income_worker;        
@@ -72,7 +79,7 @@ struct Model {
     Real T = Real(0.001);      // lump sum taxes (guess)
     Real r = Real(0.037);   // interest rate (guess)
     Real P = Real(1);      // aggregate price index (placeholder)
-    Real C_agg = Real(1600); // aggregate consumption (placeholder)
+    Real C_agg = Real(40000); // aggregate consumption (placeholder)
     Real l = Real(1);      // labor supply (placeholder)
     Real L_agg = Real(1);
     Real A_agg = Real(1);
@@ -127,7 +134,7 @@ struct Model {
     void update_entreps() {
         std::fill(firm_weight.begin(), firm_weight.end(), 0);
 
-        int max_firms = int(n_types * Real(3) / Real(4));
+        int max_firms = int(n_types * Real(1) / Real(5));
         for (int i = 0; i < max_firms; i++) {
             int sid = entrep_order[i];
             firm_weight[sid] = 1;
@@ -148,8 +155,9 @@ struct Model {
         for (int it = 0; it < p.n_tau; ++it) {
             for (int ia = 0; ia < p.n_a; ++ia) {
                 const int sid = entrep_state_id(ia, it, p.n_tau);
-                if (firm_weight[(std::size_t)sid] <= Real(0.5)) continue;
-                A_calc += std::pow(g.a[ia], p.theta - 1) * p.workingYears;
+                if (firm_weight[(std::size_t)sid] > Real(0.5)) {
+                    A_calc += std::pow(g.a[ia], p.theta - Real(1)) * p.workingYears;
+                }
             }
         }
         if (A_calc <= Real(0)) { A_agg = Real(1); return; }
@@ -477,29 +485,38 @@ struct Model {
 
     //One iteration of the vfi loops
     Real bellman_one_iter() {
-
-        std::cout << "Inside bellman_one_iter \n";
         
         //initialize values
         const auto pc = build_profit_cache();
         update_income_paths(pc);
 
         upload_income(d_income, income_worker.data(), p.workingYears);
+        upload_income_entrep(d_income_entrep, income_entrep.data(), n_types, p.workingYears);
+
         d_worker_r.upload(worker_r);
 
         //bellman_worker_working();
-        void cuda_bellman_worker_working(
-            DeviceBlockArrays & d_worker_w,
-            DeviceBlockArrays & d_worker_r,
-            const Real * d_K,
-            const Real * d_income,
-            Real tau_avg, Real inv_1pr, Real P, Real beta, Real T,
-            int n_k, int workingYears,
-            BlockArrays &worker_w
+        cuda_bellman_worker_working(
+            d_worker_w,
+            d_worker_r,
+            d_K,
+            d_income,
+            g.tau_avg, 
+            Real(1) / (Real(1) + r), P, p.beta, T,
+            p.n_k, p.workingYears,
+            worker_w
         );
 
 
-        bellman_entrep_working(pc);
+        //bellman_entrep_working(pc);
+
+        cuda_bellman_entrep_working(
+            d_entrep_w, d_entrep_r,
+            d_K, d_income_entrep, d_tau,
+            Real(1) / (Real(1) + r), P, p.beta, T,
+            p.n_k, p.workingYears, p.retirementYears, n_types, p.n_tau,
+            entrep_w
+        );
 
         std::vector<Real> s_entry_entrep((size_t)p.n_a * p.n_tau, Real(0));
         Real s_entry_worker = Real(0);
@@ -509,8 +526,25 @@ struct Model {
         std::vector<Real> b_entrep_state((size_t)p.n_a * p.n_tau, Real(0));
         build_b_state(s_entry_entrep, s_entry_worker, total_b, b_worker_state, b_entrep_state);
 
-        bellman_retirement(worker_r, b_worker_state);
-        bellman_retirement(entrep_r, b_entrep_state);
+        upload_b_state(d_b_worker, b_worker_state.data(),
+            d_b_entrep, b_entrep_state.data(), n_types);
+
+        cuda_bellman_retirement(
+            d_worker_r, d_K, d_b_worker,
+            Real(1) / (Real(1) + r), P, p.beta,
+            p.n_k, p.retirementYears, 1,
+            worker_r
+        );
+
+        cuda_bellman_retirement(
+            d_entrep_r, d_K, d_b_entrep,
+            Real(1) / (Real(1) + r), P, p.beta,
+            p.n_k, p.retirementYears, n_types,
+            entrep_r
+        );
+
+        //bellman_retirement(worker_r, b_worker_state);
+        //bellman_retirement(entrep_r, b_entrep_state);
 
         // compute V diff and swap
         Real max_diff = Real(0);
@@ -522,12 +556,13 @@ struct Model {
             blk.swap_old_new();
             d_blk.swap_old_new();
             };
-
+        
         // replace the current calls
         diff_and_swap(worker_w, d_worker_w);
         diff_and_swap(entrep_w, d_entrep_w);
         diff_and_swap(worker_r, d_worker_r);
         diff_and_swap(entrep_r, d_entrep_r);
+
 
         return max_diff;
     }
@@ -942,6 +977,9 @@ struct Model {
         d_entrep_r.allocate(p.n_a * p.n_tau, p.retirementYears, p.n_k);
 
         init_device_grids(&d_K, g.K.data(), p.n_k, &d_income, p.workingYears);
+        init_b_state(&d_b_worker, &d_b_entrep, n_types);
+        init_entrep_grids(&d_income_entrep, n_types, p.workingYears,
+            &d_tau, g.tau.data(), p.n_tau);
 
         d_worker_w.upload(worker_w);
         d_entrep_w.upload(entrep_w);
@@ -955,9 +993,14 @@ struct Model {
         d_worker_r.free();
         d_entrep_r.free();
         free_device_grids(d_K, d_income);
+        free_b_state(d_b_worker, d_b_entrep);
+        free_entrep_grids(d_income_entrep, d_tau);
     }
 
+
+
     void solve() {
+
         init_device();
         arrange_entrepreneurs();
         update_entreps();
@@ -982,7 +1025,8 @@ struct Model {
 
             //Calculate macro values + update C
             Totals totals = compute_totals();
-            C_agg = totals.consumption;
+            update_total_consumption();
+            //C_agg = totals.consumption;
             Real F = totals.assets - p.B;
             Real L_supply = (n_types - num_firms) * p.workingYears * l;
             Real L_demand = compute_total_L_demand() * C_agg;
