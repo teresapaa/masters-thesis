@@ -9,127 +9,22 @@
 #include <limits>
 #include <numeric>
 #include <cstdint>
-#include "bellman_gpu.cuh"
 
+#include "cuda_bellman.cuh"
+#include "model_gpu.h"
 
-//cl /std:c++20 /Zi /EHsc model.cpp
+// cmake compiles:
+// maybe:
+// cmake .. -G "Ninja"
+// always these:
+// cmake --build .
+// .\model.exe
 
-//Determine whether to compile as doubles or floats
-#if defined(USE_REAL)
-using Real = float;
-constexpr const char* REAL_NAME = "float";
-#else
-using Real = double;
-constexpr const char* REAL_NAME = "double";
-#endif
+//cmake .. -G "Ninja" && cmake --build . && .\model.exe
 
-static constexpr Real NEG_INF = Real(-1e30);
-
-// Utility function with penalty for non-positive consumption
-inline Real u_log(Real c) {
-    if (c <= Real(0)) return NEG_INF;
-    return std::log(c);
-}
-
-struct Params {
-    //Model parameters 
-    Real beta = Real(0.98);   
-    Real theta = Real(5);
-
-    // Bonds / government
-    Real B = Real(6000); 
-
-    // Time
-    int workingYears = 10;
-    int retirementYears = 5;
-
-    // Grids
-    int n_k = 100;
-    int n_tau = 10;
-    int n_a = 10;
-
-    Real Kmin = Real(0.0), Kmax = Real(50.0);
-    Real tauMin = Real(0.01), tauMax = Real(0.06);
-    Real amin = Real(0.5), amax = Real(5.0);
-
-    //parameters for controlling the iteration
-    int max_iters = 20000;     // total Bellman iterations allowed
-    int firm_update_every = 20; // update firms every x sweeps
-    int check_every = 10;       // convergence checks every N sweeps
-
-    //damping factors
-    Real alpha_macro = Real(0.5); // damping for r,T,P,C
-    Real gamma_firm = Real(0.10); // damping for firm_weight
-    Real tol_V = Real(1e-4);
-    Real tol_macro = Real(1e-4);
-
-};
-
-//Create and host grids for K, tau and a
-struct Grids {
-    std::vector<Real> K, tau, a;
-    Real tau_avg = Real(0);
-
-    explicit Grids(const Params& p) {
-        K.resize(p.n_k);
-        tau.resize(p.n_tau);
-        a.resize(p.n_a);
-
-        auto lin = [](std::vector<Real>& v, Real lo, Real hi) {
-            const int n = (int)v.size();
-            const Real step = (hi - lo) / Real(n - 1);
-            for (int i = 0; i < n; ++i) v[i] = lo + Real(i) * step;
-            };
-
-        lin(K, p.Kmin, p.Kmax);
-        lin(tau, p.tauMin, p.tauMax);
-        lin(a, p.amin, p.amax);
-
-        tau_avg = std::accumulate(tau.begin(), tau.end(), Real(0)) / Real(tau.size());
-    }
-};
-
-
-// get the (a, tau) falttened index 
-inline int entrep_state_id(int a_idx, int tau_idx, int n_tau) {
-    return a_idx * n_tau + tau_idx; 
-}
-
-//Arrays for iteration
-struct BlockArrays {
-    int num_states = 0;
-    int years = 0;
-    int n_k = 0;
-
-    std::vector<Real> V_old, V_new;
-    std::vector<Real> S_old, S_new;
-    std::vector<uint16_t> policy;
-    std::vector<Real> cons;
-
-    BlockArrays() = default;
-    BlockArrays(int ns, int yrs, int nk) { reset(ns, yrs, nk); }
-
-    void reset(int ns, int yrs, int nk) {
-        num_states = ns; years = yrs; n_k = nk;
-        const std::size_t N = std::size_t(ns) * std::size_t(yrs) * std::size_t(nk);
-        V_old.assign(N, Real(0));
-        V_new.assign(N, Real(0));
-        S_old.assign(N, Real(0));
-        S_new.assign(N, Real(0));
-        policy.assign(N, 0);
-        cons.assign(N, Real(0));
-    }
-
-    inline std::size_t idx(int s, int y, int i) const {
-        return (std::size_t(s) * std::size_t(years) + std::size_t(y)) * std::size_t(n_k) + std::size_t(i);
-    }
-
-    void swap_old_new() {
-        std::swap(V_old, V_new);
-        std::swap(S_old, S_new);
-    }
-};
-
+//manual compiles
+//cl /std:c++20 /Zi /EHsc /c model_gpu.cpp /Fo:model_gpu.obj
+//nvcc cuda_bellman.obj model_gpu.obj -o model.exe
 
 
 struct Model {
@@ -147,6 +42,14 @@ struct Model {
     BlockArrays entrep_w;
     BlockArrays worker_r;
     BlockArrays entrep_r;
+
+    DeviceBlockArrays d_worker_w;
+    DeviceBlockArrays d_entrep_w;
+    DeviceBlockArrays d_worker_r;
+    DeviceBlockArrays d_entrep_r;
+
+    Real* d_K = nullptr;
+    Real* d_income = nullptr;
 
     //Worker and entrepreneur incomes
     std::vector<Real> income_worker;        
@@ -180,7 +83,7 @@ struct Model {
     //helpers
     int n_types;
 
-    GpuWorker<Real> gpu_worker;
+    //GpuWorker<Real> gpu_worker;
 
 
     explicit Model(const Params& params)
@@ -195,8 +98,8 @@ struct Model {
         income_entrep((std::size_t)p.n_a* p.n_tau* p.workingYears, Real(0)),
         s_entry_entrep((std::size_t)p.n_a* p.n_tau, Real(0)),
         n_types(p.n_a * p.n_tau),
-        entrep_order((std::size_t)p.n_a* p.n_tau),
-        gpu_worker(p.n_k, p.workingYears, g.K)
+        entrep_order((std::size_t)p.n_a* p.n_tau)
+        //gpu_worker(p.n_k, p.workingYears, g.K)
     {}
 
     //index in the income vector
@@ -373,6 +276,7 @@ struct Model {
 
     //bellman iteration for the working worker
     void bellman_worker_working() {
+       /*
         gpu_worker.upload_boundary(worker_r.V_old.data());
 
         gpu_worker.run(
@@ -380,6 +284,10 @@ struct Model {
             worker_w.V_new.data(),
             worker_w.policy.data(),
             worker_w.cons.data());
+    */
+
+
+
     }
 
 
@@ -570,11 +478,27 @@ struct Model {
     //One iteration of the vfi loops
     Real bellman_one_iter() {
 
+        std::cout << "Inside bellman_one_iter \n";
+        
         //initialize values
         const auto pc = build_profit_cache();
         update_income_paths(pc);
 
-        bellman_worker_working();
+        upload_income(d_income, income_worker.data(), p.workingYears);
+        d_worker_r.upload(worker_r);
+
+        //bellman_worker_working();
+        void cuda_bellman_worker_working(
+            DeviceBlockArrays & d_worker_w,
+            DeviceBlockArrays & d_worker_r,
+            const Real * d_K,
+            const Real * d_income,
+            Real tau_avg, Real inv_1pr, Real P, Real beta, Real T,
+            int n_k, int workingYears,
+            BlockArrays &worker_w
+        );
+
+
         bellman_entrep_working(pc);
 
         std::vector<Real> s_entry_entrep((size_t)p.n_a * p.n_tau, Real(0));
@@ -590,25 +514,30 @@ struct Model {
 
         // compute V diff and swap
         Real max_diff = Real(0);
-        auto diff_and_swap = [&](BlockArrays& blk) {
+        // replace the current diff_and_swap lambda
+        auto diff_and_swap = [&](BlockArrays& blk, DeviceBlockArrays& d_blk) {
             for (std::size_t k = 0; k < blk.V_old.size(); ++k) {
                 max_diff = std::max(max_diff, (Real)std::abs(blk.V_new[k] - blk.V_old[k]));
             }
             blk.swap_old_new();
+            d_blk.swap_old_new();
             };
 
-        diff_and_swap(worker_w);
-        diff_and_swap(entrep_w);
-        diff_and_swap(worker_r);
-        diff_and_swap(entrep_r);
+        // replace the current calls
+        diff_and_swap(worker_w, d_worker_w);
+        diff_and_swap(entrep_w, d_entrep_w);
+        diff_and_swap(worker_r, d_worker_r);
+        diff_and_swap(entrep_r, d_entrep_r);
 
         return max_diff;
     }
+
 
     struct Totals {
         Real assets;
         Real consumption;
     };
+
 
     Totals compute_totals()
     {
@@ -1005,8 +934,31 @@ struct Model {
         print_block(worker_r, "retirement");
     }
 
-    void solve() {
 
+    void init_device() {
+        d_worker_w.allocate(1, p.workingYears, p.n_k);
+        d_entrep_w.allocate(p.n_a * p.n_tau, p.workingYears, p.n_k);
+        d_worker_r.allocate(1, p.retirementYears, p.n_k);
+        d_entrep_r.allocate(p.n_a * p.n_tau, p.retirementYears, p.n_k);
+
+        init_device_grids(&d_K, g.K.data(), p.n_k, &d_income, p.workingYears);
+
+        d_worker_w.upload(worker_w);
+        d_entrep_w.upload(entrep_w);
+        d_worker_r.upload(worker_r);
+        d_entrep_r.upload(entrep_r);
+    }
+
+    void free_device() {
+        d_worker_w.free();
+        d_entrep_w.free();
+        d_worker_r.free();
+        d_entrep_r.free();
+        free_device_grids(d_K, d_income);
+    }
+
+    void solve() {
+        init_device();
         arrange_entrepreneurs();
         update_entreps();
         update_prices_from_firms();
@@ -1017,12 +969,14 @@ struct Model {
         RUpdater r_updater;
         Real last_r = r, last_T = T, last_C = C_agg, last_P = P;
 
-
         for (int iter = 1; iter <= p.max_iters; ++iter) {
 
             //1: Iterate vf:s stable with fixed macros
             Real Vdiff = 1;
-            while (Vdiff > p.tol_V) { Vdiff = bellman_one_iter(); }
+            bellman_one_iter();
+            while (Vdiff > p.tol_V) { 
+                Vdiff = bellman_one_iter();
+            }
 
             // 2) Update macros
 
@@ -1063,8 +1017,7 @@ struct Model {
                 << ", gap=" << (double)(p.B - totals.assets) << ")\n"
                 << "  Consumption: " << std::setw(12) << (double)totals.consumption << "\n"
                 << "  Firms:       " << std::setw(4) << num_firms << "\n"
-                << "  L supply:    " << std::setw(12) << (double)L_supply
-                << "  L demand coef=" << (double)L_coef << "\n";
+                << "  L supply:    " << std::setw(12) << (double)L_supply << "\n";
 
 
             // 3) Convergence checks occasionally
@@ -1074,7 +1027,7 @@ struct Model {
                 const Real dP = std::abs(P - last_P);
                 const Real dC = std::abs(C_agg - last_C);
 
-                const Real d_am = std::abs(assets - p.B);
+                const Real d_am = std::abs(totals.assets - p.B);
 
 
                 // stop when BOTH V and macros are stable
@@ -1084,11 +1037,10 @@ struct Model {
                     break;
                 }
 
-
-
                 last_r = r; last_T = T; last_P = P; last_C = C_agg;
             //}
         }
+        free_device();
     }
 };
 
@@ -1098,6 +1050,13 @@ int main() {
 
     Params p;
     Model m(p);
+    // Step 1 sanity check — run before solve()
+    bool ok = cuda_roundtrip_test(m.g.K, m.worker_w.V_old);
+    if (!ok) {
+        printf("Round-trip test FAILED, aborting.\n");
+        return 1;
+    }
+
     m.solve();
     return 0;
 };

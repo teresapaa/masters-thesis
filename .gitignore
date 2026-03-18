@@ -44,3 +44,5 @@
 *.vs/
 
 out/
+
+*build
