@@ -15,7 +15,7 @@ using Real = double;
 constexpr const char* REAL_NAME = "double";
 #endif
 
-static constexpr Real NEG_INF = Real(-1e30);
+static constexpr Real NEG_INF = Real(-1000);
 
 inline Real u_log(Real c) {
     if (c <= Real(0)) return NEG_INF;
@@ -26,14 +26,14 @@ inline Real u_log(Real c) {
 struct Params {
     Real beta = Real(0.98);
     Real theta = Real(5);
-    Real B = Real(6000);
+    Real B = Real(24000);
 
     int workingYears = 10;
     int retirementYears = 5;
 
     int n_k = 100;
-    int n_tau = 20;
-    int n_a = 20;
+    int n_tau = 30;
+    int n_a = 31;
 
     Real Kmin = Real(0.0), Kmax = Real(50.0);
     Real tauMin = Real(0.01), tauMax = Real(0.06);

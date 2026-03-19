@@ -20,6 +20,7 @@
     } while (0)
 #endif
 
+
 struct BlockArrays;
 
 struct DeviceBlockArrays {
@@ -79,6 +80,10 @@ void init_device_grids(Real** d_K, const Real* K, int n_k,
 
 void init_entrep_grids(Real** d_income_entrep, int n_types, int workingYears,
     Real** d_tau, const Real* tau, int n_tau);
+
+Real cuda_max_abs_diff(DeviceBlockArrays& d_blk);
+
+void download_for_macros(DeviceBlockArrays& d_blk, BlockArrays& blk);
 
 void cuda_bellman_worker_working(
         DeviceBlockArrays& d_worker_w,

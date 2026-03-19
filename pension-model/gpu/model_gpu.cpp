@@ -76,10 +76,10 @@ struct Model {
     std::vector<Real> prices;      // size n_a*n_tau
 
     // parameters
-    Real T = Real(0.001);      // lump sum taxes (guess)
+    Real T = Real(0.01);      // lump sum taxes (guess)
     Real r = Real(0.037);   // interest rate (guess)
     Real P = Real(1);      // aggregate price index (placeholder)
-    Real C_agg = Real(40000); // aggregate consumption (placeholder)
+    Real C_agg = Real(70000); // aggregate consumption (placeholder)
     Real l = Real(1);      // labor supply (placeholder)
     Real L_agg = Real(1);
     Real A_agg = Real(1);
@@ -177,7 +177,7 @@ struct Model {
                 if (firm_weight[(std::size_t)sid] > Real(0.5)) {
                     Real price = (p.theta / (p.theta - Real(1))) / g.a[ia];
                     prices[(std::size_t)sid] = price;
-                    P_idx += std::pow(price, Real(1) - p.theta);
+                    P_idx += std::pow(price, Real(1) - p.theta) * p.workingYears;
                 }
             }
         }
@@ -486,14 +486,6 @@ struct Model {
     //One iteration of the vfi loops
     Real bellman_one_iter() {
         
-        //initialize values
-        const auto pc = build_profit_cache();
-        update_income_paths(pc);
-
-        upload_income(d_income, income_worker.data(), p.workingYears);
-        upload_income_entrep(d_income_entrep, income_entrep.data(), n_types, p.workingYears);
-
-        d_worker_r.upload(worker_r);
 
         //bellman_worker_working();
         cuda_bellman_worker_working(
@@ -557,14 +549,33 @@ struct Model {
             d_blk.swap_old_new();
             };
         
-        // replace the current calls
-        diff_and_swap(worker_w, d_worker_w);
-        diff_and_swap(entrep_w, d_entrep_w);
-        diff_and_swap(worker_r, d_worker_r);
-        diff_and_swap(entrep_r, d_entrep_r);
+
+        auto gpu_diff_and_swap = [&](DeviceBlockArrays& d_blk) {
+            Real d = cuda_max_abs_diff(d_blk);
+            if (d > max_diff) max_diff = d;
+            d_blk.swap_old_new();
+            };
+
+        gpu_diff_and_swap(d_worker_w);
+        gpu_diff_and_swap(d_entrep_w);
+        gpu_diff_and_swap(d_worker_r);
+        gpu_diff_and_swap(d_entrep_r);
+
+        //diff_and_swap(worker_w, d_worker_w);
+        //diff_and_swap(entrep_w, d_entrep_w);
+        //diff_and_swap(worker_r, d_worker_r);
+        //diff_and_swap(entrep_r, d_entrep_r);
 
 
         return max_diff;
+    }
+
+
+    void download_all_for_macros() {
+        download_for_macros(d_worker_w, worker_w);
+        download_for_macros(d_entrep_w, entrep_w);
+        download_for_macros(d_worker_r, worker_r);
+        download_for_macros(d_entrep_r, entrep_r);
     }
 
 
@@ -1015,11 +1026,21 @@ struct Model {
         for (int iter = 1; iter <= p.max_iters; ++iter) {
 
             //1: Iterate vf:s stable with fixed macros
+
+            //initialize values
+            const auto pc = build_profit_cache();
+            update_income_paths(pc);
+
+            upload_income(d_income, income_worker.data(), p.workingYears);
+            upload_income_entrep(d_income_entrep, income_entrep.data(), n_types, p.workingYears);
+
             Real Vdiff = 1;
             bellman_one_iter();
             while (Vdiff > p.tol_V) { 
                 Vdiff = bellman_one_iter();
             }
+
+            download_all_for_macros();
 
             // 2) Update macros
 

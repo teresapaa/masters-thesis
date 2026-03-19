@@ -11,3 +11,4 @@ add_executable(model
 
 find_package(CUDAToolkit REQUIRED)
 target_link_libraries(model PRIVATE CUDA::cudart)
+target_compile_options(model PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--extended-lambda>)

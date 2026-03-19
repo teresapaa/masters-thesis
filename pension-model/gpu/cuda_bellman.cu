@@ -1,6 +1,10 @@
 
 //manual compile commands
 //nvcc -c cuda_bellman.cu -o cuda_bellman.obj
+#include <thrust/device_ptr.h>
+#include <thrust/iterator/zip_iterator.h>
+#include <thrust/transform_reduce.h>
+#include <thrust/functional.h>
 #include "cuda_bellman.cuh"
 
 
@@ -189,6 +193,52 @@ void init_entrep_grids(Real** d_income_entrep, int n_types, int workingYears,
     CUDA_CHECK(cudaMalloc(d_tau, n_tau * sizeof(Real)));
     CUDA_CHECK(cudaMemcpy(*d_tau, tau, n_tau * sizeof(Real), cudaMemcpyHostToDevice));
 }
+
+
+struct AbsDiff {
+    __host__ __device__
+        Real operator()(const thrust::tuple<Real, Real>& t) const noexcept {
+        Real a = thrust::get<0>(t);
+        Real b = thrust::get<1>(t);
+        Real d = a - b;
+        return d >= Real(0) ? d : -d;
+    }
+};
+
+Real cuda_max_abs_diff(DeviceBlockArrays& d_blk) {
+
+    const std::size_t N = d_blk.total();
+    if (N == 0) return Real(0);
+
+    // wrap raw device pointers
+    thrust::device_ptr<Real> p_new(d_blk.V_new);
+    thrust::device_ptr<Real> p_old(d_blk.V_old);
+
+    // zip iterator [ (V_new[0], V_old[0]) ... (V_new[N-1], V_old[N-1]) ]
+    auto first = thrust::make_zip_iterator(thrust::make_tuple(p_new, p_old));
+    auto last = thrust::make_zip_iterator(thrust::make_tuple(p_new + N, p_old + N));
+
+    // initial value must be of type Real
+    Real init = Real(0);
+
+    // compute maximum absolute difference
+    Real diff = thrust::transform_reduce(first, last, AbsDiff(), init, thrust::maximum<Real>());
+
+    return diff;
+}
+
+
+void download_for_macros(DeviceBlockArrays& d_blk, BlockArrays& blk)
+{
+    const size_t N = d_blk.total();
+    const size_t bytes_r = N * sizeof(Real);
+    const size_t bytes_p = N * sizeof(uint16_t);
+    CUDA_CHECK(cudaMemcpy(blk.V_old.data(), d_blk.V_old, bytes_r, cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(blk.policy.data(), d_blk.policy, bytes_p, cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(blk.cons.data(), d_blk.cons, bytes_r, cudaMemcpyDeviceToHost));
+}
+
+
 
 bool cuda_roundtrip_test(const std::vector<Real>& K,
     const std::vector<Real>& V_old)
