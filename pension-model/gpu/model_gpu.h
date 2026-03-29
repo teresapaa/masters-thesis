@@ -26,20 +26,20 @@ inline Real u_log(Real c) {
 struct Params {
     Real beta = Real(0.98);
     Real theta = Real(5);
-    Real B = Real(24000);
+    Real B = Real(266000);
 
-    int workingYears = 10;
-    int retirementYears = 5;
+    int workingYears = 12;
+    int retirementYears = 4;
 
     int n_k = 100;
-    int n_tau = 30;
-    int n_a = 31;
+    int n_tau = 100;
+    int n_a = 100;
 
     Real Kmin = Real(0.0), Kmax = Real(50.0);
     Real tauMin = Real(0.01), tauMax = Real(0.06);
     Real amin = Real(0.5), amax = Real(5.0);
 
-    int max_iters = 20000;
+    int max_iters = 1000;
     int firm_update_every = 20;
     int check_every = 10;
 

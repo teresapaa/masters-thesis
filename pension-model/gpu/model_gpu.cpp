@@ -20,6 +20,9 @@
 // cmake --build .
 // .\model.exe
 
+//cmake .. -DUSE_FLOAT=ON -DCMAKE_BUILD_TYPE=Release
+//cmake --build .
+
 //cmake .. -G "Ninja" && cmake --build . && .\model.exe
 
 //manual compiles
@@ -62,9 +65,11 @@ struct Model {
     std::vector<Real> income_worker;        
     std::vector<Real> income_entrep;
 
-    //Pension system
-    Real s_entry_worker = Real(0);                     
+    //Pension system                   
     std::vector<Real> s_entry_entrep;
+    std::vector<Real> b_worker_state;
+    std::vector<Real> b_entrep_state;
+    Real s_entry_worker = 0;
 
     // Entrepreneur membership weights (0/1)
     std::vector<Real> firm_weight; // size n_a*n_tau
@@ -75,11 +80,12 @@ struct Model {
     // Prices 
     std::vector<Real> prices;      // size n_a*n_tau
 
+
     // parameters
     Real T = Real(0.01);      // lump sum taxes (guess)
     Real r = Real(0.037);   // interest rate (guess)
     Real P = Real(1);      // aggregate price index (placeholder)
-    Real C_agg = Real(70000); // aggregate consumption (placeholder)
+    Real C_agg = Real(150000); // aggregate consumption (placeholder)
     Real l = Real(1);      // labor supply (placeholder)
     Real L_agg = Real(1);
     Real A_agg = Real(1);
@@ -105,7 +111,9 @@ struct Model {
         income_entrep((std::size_t)p.n_a* p.n_tau* p.workingYears, Real(0)),
         s_entry_entrep((std::size_t)p.n_a* p.n_tau, Real(0)),
         n_types(p.n_a * p.n_tau),
-        entrep_order((std::size_t)p.n_a* p.n_tau)
+        entrep_order((std::size_t)p.n_a* p.n_tau),
+        b_worker_state(1, Real(0)),
+        b_entrep_state((std::size_t)p.n_a* p.n_tau, Real(0))
         //gpu_worker(p.n_k, p.workingYears, g.K)
     {}
 
@@ -134,7 +142,8 @@ struct Model {
     void update_entreps() {
         std::fill(firm_weight.begin(), firm_weight.end(), 0);
 
-        int max_firms = int(n_types * Real(1) / Real(5));
+        //int max_firms = int(n_types * Real(1) / Real(5));
+        int max_firms = 1530;
         for (int i = 0; i < max_firms; i++) {
             int sid = entrep_order[i];
             firm_weight[sid] = 1;
@@ -487,7 +496,7 @@ struct Model {
     Real bellman_one_iter() {
         
 
-        //bellman_worker_working();
+
         cuda_bellman_worker_working(
             d_worker_w,
             d_worker_r,
@@ -499,9 +508,6 @@ struct Model {
             worker_w
         );
 
-
-        //bellman_entrep_working(pc);
-
         cuda_bellman_entrep_working(
             d_entrep_w, d_entrep_r,
             d_K, d_income_entrep, d_tau,
@@ -509,17 +515,6 @@ struct Model {
             p.n_k, p.workingYears, p.retirementYears, n_types, p.n_tau,
             entrep_w
         );
-
-        std::vector<Real> s_entry_entrep((size_t)p.n_a * p.n_tau, Real(0));
-        Real s_entry_worker = Real(0);
-        Real total_b = update_s_entries_and_total_b(s_entry_entrep, s_entry_worker);
-
-        std::vector<Real> b_worker_state(1, Real(0));
-        std::vector<Real> b_entrep_state((size_t)p.n_a * p.n_tau, Real(0));
-        build_b_state(s_entry_entrep, s_entry_worker, total_b, b_worker_state, b_entrep_state);
-
-        upload_b_state(d_b_worker, b_worker_state.data(),
-            d_b_entrep, b_entrep_state.data(), n_types);
 
         cuda_bellman_retirement(
             d_worker_r, d_K, d_b_worker,
@@ -535,8 +530,6 @@ struct Model {
             entrep_r
         );
 
-        //bellman_retirement(worker_r, b_worker_state);
-        //bellman_retirement(entrep_r, b_entrep_state);
 
         // compute V diff and swap
         Real max_diff = Real(0);
@@ -560,12 +553,6 @@ struct Model {
         gpu_diff_and_swap(d_entrep_w);
         gpu_diff_and_swap(d_worker_r);
         gpu_diff_and_swap(d_entrep_r);
-
-        //diff_and_swap(worker_w, d_worker_w);
-        //diff_and_swap(entrep_w, d_entrep_w);
-        //diff_and_swap(worker_r, d_worker_r);
-        //diff_and_swap(entrep_r, d_entrep_r);
-
 
         return max_diff;
     }
@@ -1008,6 +995,19 @@ struct Model {
         free_entrep_grids(d_income_entrep, d_tau);
     }
 
+    void compute_and_upload_b_state() {
+        std::fill(s_entry_entrep.begin(), s_entry_entrep.end(), Real(0));
+        s_entry_worker = Real(0);
+        std::fill(b_worker_state.begin(), b_worker_state.end(), Real(0));
+        std::fill(b_entrep_state.begin(), b_entrep_state.end(), Real(0));
+
+        Real total_b = update_s_entries_and_total_b(s_entry_entrep, s_entry_worker);
+        build_b_state(s_entry_entrep, s_entry_worker, total_b,
+            b_worker_state, b_entrep_state);
+
+        upload_b_state(d_b_worker, b_worker_state.data(),
+            d_b_entrep, b_entrep_state.data(), n_types);
+    }
 
 
     void solve() {
@@ -1035,10 +1035,10 @@ struct Model {
             upload_income_entrep(d_income_entrep, income_entrep.data(), n_types, p.workingYears);
 
             Real Vdiff = 1;
-            bellman_one_iter();
-            while (Vdiff > p.tol_V) { 
+            compute_and_upload_b_state();
+            do {
                 Vdiff = bellman_one_iter();
-            }
+            } while (Vdiff > p.tol_V);
 
             download_all_for_macros();
 
@@ -1052,18 +1052,20 @@ struct Model {
             Real L_supply = (n_types - num_firms) * p.workingYears * l;
             Real L_demand = compute_total_L_demand() * C_agg;
 
+            if (iter % 40 == 0) {
+                //udpdate entrepreneur ser
+                int nf = update_entrepreneur_set(1);
+                num_firms = nf;
 
-            //udpdate entrepreneur ser
-            int nf = update_entrepreneur_set(1);
-            num_firms = nf;
-
-            //update macros based on entrepreneur set
-            update_prices_from_firms();
-            calculate_A_agg();
-            compute_total_L_demand();
-
+                //update macros based on entrepreneur set
+                update_prices_from_firms();
+                calculate_A_agg();
+                compute_total_L_demand();
+                r_updater = RUpdater{};
+            }
             //update r and T
             r = r_updater.update(r, totals.assets, p.B);
+            //r = r + 0.01 * (totals.assets - p.B) / p.B;
 
             Real working_age_population = Real(n_types) * Real(p.workingYears);
             T = r * p.B / working_age_population;
@@ -1087,24 +1089,28 @@ struct Model {
 
             // 3) Convergence checks occasionally
             //if (iter % p.check_every == 0) {
-                const Real dr = std::abs(r - last_r);
-                const Real dT = std::abs(T - last_T);
-                const Real dP = std::abs(P - last_P);
-                const Real dC = std::abs(C_agg - last_C);
+            const Real dr = std::abs(r - last_r);
+            const Real dT = std::abs(T - last_T);
+            const Real dP = std::abs(P - last_P);
+            const Real dC = std::abs(C_agg - last_C);
 
-                const Real d_am = std::abs(totals.assets - p.B);
+            const Real d_am = std::abs(totals.assets - p.B);
 
 
-                // stop when BOTH V and macros are stable
-                if (Vdiff < p.tol_V && dr < p.tol_macro && dT < p.tol_macro && dP < p.tol_macro && dC < p.tol_macro) {
-                    std::cout << "Converged.\n";
-                    run_diagnostics();
-                    break;
-                }
+            // stop when BOTH V and macros are stable
+            if (Vdiff < p.tol_V && dr < p.tol_macro && dT < p.tol_macro && dP < p.tol_macro && dC < p.tol_macro) {
+                std::cout << "Converged.\n";
+                //run_diagnostics();
+                //break;
+            }
 
-                last_r = r; last_T = T; last_P = P; last_C = C_agg;
-            //}
+            last_r = r; last_T = T; last_P = P; last_C = C_agg;
+                //}
+           
+
         }
+		std::cout << "\nFinished " << p.max_iters << " iterations.\n";
+        run_diagnostics();
         free_device();
     }
 };
@@ -1115,13 +1121,6 @@ int main() {
 
     Params p;
     Model m(p);
-    // Step 1 sanity check — run before solve()
-    bool ok = cuda_roundtrip_test(m.g.K, m.worker_w.V_old);
-    if (!ok) {
-        printf("Round-trip test FAILED, aborting.\n");
-        return 1;
-    }
-
     m.solve();
     return 0;
 };
